@@ -15,10 +15,14 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
   const { messages, setMessages, appendMessage, updateLastAssistantMessage } = useSessionStore()
   const [isStreaming, setIsStreaming] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const { sendMessage } = useSSEChat()
+  const { sendMessage, abort } = useSSEChat()
 
   useEffect(() => {
+    // 切换会话时中断正在进行的流式请求，防止旧 token 污染新会话
+    abort()
+    setIsStreaming(false)
     sessionsApi.messages(sessionId).then(setMessages).catch(console.error)
+    return () => { abort() }
   }, [sessionId])
 
   useEffect(() => {
@@ -75,7 +79,7 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex-1 flex flex-col min-h-0">
       {/* Messages */}
       <div
         ref={scrollRef}
@@ -129,7 +133,7 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
       </div>
 
       {/* Input */}
-      <div className="max-w-3xl mx-auto w-full">
+      <div className="shrink-0 max-w-3xl mx-auto w-full">
         <ChatInput onSend={handleSend} disabled={isStreaming} />
       </div>
     </div>

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from pathlib import Path
 from typing import Annotated, AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -134,13 +135,21 @@ async def stream_chat(
         finally:
             # 持久化消息
             full_text = "".join(full_response)
+            # 将查询图片落盘，供后续消息历史展示
+            saved_image_paths: list[str] = []
+            if query_image:
+                img_dir = Path(settings.storage_root) / "images" / "query_images"
+                img_dir.mkdir(parents=True, exist_ok=True)
+                img_filename = f"{message_id}.png"
+                (img_dir / img_filename).write_bytes(query_image)
+                saved_image_paths = [f"query_images/{img_filename}"]
             asyncio.create_task(_save_messages(
                 session_id=session.id,
                 message_id=message_id,
                 user_content=body.content,
                 assistant_content=full_text,
                 sources=sources_data,
-                image_paths=[f"query_image_{message_id}.png"] if query_image else [],
+                image_paths=saved_image_paths,
             ))
             # 自动生成会话标题（仅首条消息）
             if not history:
