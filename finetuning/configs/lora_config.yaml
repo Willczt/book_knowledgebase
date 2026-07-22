@@ -1,0 +1,14 @@
+r: 16                          # LoRA rank
+lora_alpha: 16                 # LoRA alpha（通常等于 r）
+target_modules:                # 对哪些模块应用 LoRA
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+lora_dropout: 0                # dropout=0 在 Unsloth 中性能最优
+bias: none
+use_gradient_checkpointing: unsloth   # Unsloth 优化的长上下文 GC
+random_state: 42

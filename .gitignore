@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# 虚拟环境
+.venv/
+venv/
+env/
+.env
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3
+
+# 日志
+*.log
+logs/
+
+# 存储（上传文件和提取图片）
+storage/
+!storage/.gitkeep
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# 微调模型输出
+finetuning/outputs/
+finetuning/data/*.jsonl
+finetuning/data/*.json
+
+# Docker
+*.tar
+
+# 测试覆盖率
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Alembic
+backend/db/migrations/versions/*.py
+!backend/db/migrations/versions/.gitkeep

@@ -1,0 +1,18 @@
+# 开发覆盖：只启动 Qdrant，后端和前端在本地运行
+services:
+  qdrant:
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+
+  postgres:
+    profiles:
+      - postgres  # 仅 --profile postgres 时启动
+
+  backend:
+    profiles:
+      - disabled
+
+  frontend:
+    profiles:
+      - disabled
