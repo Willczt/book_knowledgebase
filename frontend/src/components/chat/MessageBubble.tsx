@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { ChevronDown, ChevronUp, FileText, Image } from 'lucide-react'
+import { ChevronDown, ChevronUp, FileText, Image, Cpu } from 'lucide-react'
 import type { Message, SourceChunk } from '../../types/api'
 import clsx from 'clsx'
 
@@ -15,39 +15,52 @@ function SourcePanel({ sources }: { sources: SourceChunk[] }) {
   if (!sources.length) return null
 
   return (
-    <div className="mt-2 text-xs">
+    <div className="mt-3 text-xs animate-fade-in">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 text-gray-500 hover:text-gray-300 transition-colors"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.07] text-gray-500 hover:text-gray-300 transition-all duration-150 border border-white/[0.05]"
       >
-        {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-        <span>参考来源 ({sources.length} 条)</span>
+        {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+        <span className="font-medium">引用来源</span>
+        <span className="ml-1 px-1.5 py-0.5 rounded-full bg-brand/20 text-brand-light text-[10px] font-semibold">
+          {sources.length}
+        </span>
       </button>
+
       {open && (
-        <div className="mt-2 space-y-2">
-          {sources.map((s, i) => (
+        <div className="mt-2 space-y-2 animate-slide-up">
+          {sources.map((s) => (
             <div
               key={s.chunk_id}
-              className="bg-gray-800 rounded-lg p-2.5 border border-gray-700"
+              className="bg-surface-2 rounded-xl p-3 border border-white/[0.06] hover:border-white/[0.10] transition-colors"
             >
-              <div className="flex items-center gap-1.5 mb-1.5">
-                {s.chunk_type === 'image_caption' ? (
-                  <Image size={10} className="text-blue-400" />
-                ) : (
-                  <FileText size={10} className="text-gray-400" />
+              <div className="flex items-center gap-1.5 mb-2">
+                <div className={clsx(
+                  'w-4 h-4 rounded-md flex items-center justify-center flex-shrink-0',
+                  s.chunk_type === 'image_caption'
+                    ? 'bg-blue-500/20 text-blue-400'
+                    : 'bg-violet-500/20 text-violet-400',
+                )}>
+                  {s.chunk_type === 'image_caption'
+                    ? <Image size={9} />
+                    : <FileText size={9} />}
+                </div>
+                <span className="text-gray-400 font-medium truncate flex-1">{s.source_doc}</span>
+                {s.page_num && (
+                  <span className="text-gray-600 shrink-0">第 {s.page_num} 页</span>
                 )}
-                <span className="text-gray-400 font-medium truncate">{s.source_doc}</span>
-                {s.page_num && <span className="text-gray-600">第 {s.page_num} 页</span>}
-                <span className="ml-auto text-gray-600">相关度 {(s.score * 100).toFixed(0)}%</span>
+                <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-green-500/10 text-green-400 text-[10px] font-medium">
+                  {(s.score * 100).toFixed(0)}%
+                </span>
               </div>
               {s.image_path && (
                 <img
                   src={`/images/${s.image_path.replace('images/', '')}`}
                   alt="相关图片"
-                  className="max-h-40 rounded-lg mb-1.5 border border-gray-700"
+                  className="max-h-36 rounded-lg mb-2 border border-white/[0.06] object-cover"
                 />
               )}
-              <p className="text-gray-400 text-xs line-clamp-3">{s.text}</p>
+              <p className="text-gray-500 line-clamp-2 leading-relaxed">{s.text}</p>
             </div>
           ))}
         </div>
@@ -59,57 +72,66 @@ function SourcePanel({ sources }: { sources: SourceChunk[] }) {
 export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
   const isUser = message.role === 'user'
 
+  if (isUser) {
+    return (
+      <div className="flex justify-end mb-5 animate-slide-up">
+        <div className="max-w-[78%] flex flex-col items-end gap-1">
+          {message.image_paths?.map((path, i) => (
+            <img
+              key={i}
+              src={path.startsWith('data:') ? path : `/images/${path}`}
+              alt="用户图片"
+              className="max-h-48 rounded-xl border border-white/[0.08] object-cover"
+            />
+          ))}
+          <div
+            className="px-4 py-2.5 rounded-2xl rounded-tr-sm text-white text-sm leading-relaxed"
+            style={{ background: 'linear-gradient(135deg, #7c3aed 0%, #3b82f6 100%)' }}
+          >
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className={clsx('flex gap-3 mb-6', isUser && 'flex-row-reverse')}>
-      {/* 头像 */}
+    <div className="flex gap-3 mb-6 animate-slide-up">
+      {/* AI Avatar */}
       <div
-        className={clsx(
-          'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0',
-          isUser ? 'bg-brand text-white' : 'bg-gray-700 text-gray-200',
-        )}
+        className="w-7 h-7 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
+        style={{ background: 'linear-gradient(135deg, #7c3aed 0%, #3b82f6 100%)' }}
       >
-        {isUser ? '我' : 'AI'}
+        <Cpu size={13} className="text-white" />
       </div>
 
-      <div className={clsx('flex flex-col gap-1 max-w-[80%]', isUser && 'items-end')}>
-        {/* 图片 */}
+      <div className="flex-1 min-w-0">
+        {/* AI message images */}
         {message.image_paths?.map((path, i) => (
           <img
             key={i}
             src={path.startsWith('data:') ? path : `/images/${path}`}
-            alt="用户图片"
-            className="max-h-48 rounded-xl border border-gray-700 mb-1"
+            alt="AI图片"
+            className="max-h-48 rounded-xl border border-white/[0.08] mb-2"
           />
         ))}
 
-        {/* 文字内容 */}
-        <div
-          className={clsx(
-            'rounded-2xl px-4 py-3 text-sm',
-            isUser
-              ? 'bg-brand text-white rounded-tr-sm'
-              : 'bg-gray-800 text-gray-200 rounded-tl-sm',
-          )}
-        >
-          {isUser ? (
-            <p className="whitespace-pre-wrap">{message.content}</p>
-          ) : (
-            <div className={clsx('markdown-body', isStreaming && !message.content && 'typing-cursor')}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {message.content || ''}
-              </ReactMarkdown>
-              {isStreaming && message.content && (
-                <span className="typing-cursor" />
-              )}
-            </div>
+        {/* Content */}
+        <div className={clsx(
+          'markdown-body',
+          isStreaming && !message.content && 'typing-cursor',
+        )}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {message.content || ''}
+          </ReactMarkdown>
+          {isStreaming && message.content && (
+            <span className="typing-cursor" />
           )}
         </div>
 
-        {/* 来源 */}
-        {!isUser && message.sources && message.sources.length > 0 && !isStreaming && (
-          <div className="px-1">
-            <SourcePanel sources={message.sources} />
-          </div>
+        {/* Sources */}
+        {!isStreaming && message.sources && message.sources.length > 0 && (
+          <SourcePanel sources={message.sources} />
         )}
       </div>
     </div>

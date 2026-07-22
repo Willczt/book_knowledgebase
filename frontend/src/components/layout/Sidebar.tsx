@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Upload, X, ChevronDown, ChevronRight, RefreshCw, Database } from 'lucide-react'
+import {
+  Plus, Trash2, Upload, X, ChevronDown, ChevronRight,
+  RefreshCw, Database, BookOpen, MessageSquare, Sparkles,
+} from 'lucide-react'
 import { knowledgeBaseApi } from '../../api/knowledgeBase'
 import { documentsApi } from '../../api/documents'
 import { sessionsApi } from '../../api/sessions'
@@ -14,7 +17,7 @@ function CreateKBModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('')
   const [desc, setDesc] = useState('')
   const [provider, setProvider] = useState('doubao')
-  const [modelId, setModelId] = useState('doubao-embedding-text-240715')
+  const [modelId, setModelId] = useState('doubao-embedding-vision-251215')
   const [dim, setDim] = useState(2048)
   const queryClient = useQueryClient()
   const addKB = useKBStore((s) => s.addKB)
@@ -50,25 +53,35 @@ function CreateKBModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="card w-full max-w-md p-6">
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold">新建知识库</h2>
-          <button onClick={onClose} className="btn-ghost p-1"><X size={16} /></button>
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
+      <div className="glass-card w-full max-w-md p-6 animate-slide-up">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <div
+              className="w-7 h-7 rounded-lg flex items-center justify-center"
+              style={{ background: 'linear-gradient(135deg, #7c3aed, #3b82f6)' }}
+            >
+              <Database size={13} className="text-white" />
+            </div>
+            <h2 className="text-sm font-semibold text-gray-100">新建知识库</h2>
+          </div>
+          <button onClick={onClose} className="btn-icon"><X size={15} /></button>
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">名称 *</label>
+            <label className="text-xs text-gray-500 mb-1.5 block font-medium">名称 *</label>
             <input
               className="input-base w-full"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="如：机器学习书单"
+              autoFocus
             />
           </div>
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">描述</label>
+            <label className="text-xs text-gray-500 mb-1.5 block font-medium">描述</label>
             <textarea
               className="input-base w-full resize-none"
               rows={2}
@@ -78,30 +91,31 @@ function CreateKBModal({ onClose }: { onClose: () => void }) {
             />
           </div>
           <div>
-            <label className="text-xs text-gray-400 mb-2 block">
-              Embedding 模型（创建后不可更改）
+            <label className="text-xs text-gray-500 mb-2 block font-medium">
+              Embedding 模型
+              <span className="ml-1.5 text-[10px] text-amber-500/80 font-normal">创建后不可更改</span>
             </label>
             <div className="space-y-2">
               {models?.map((m) => (
                 <label
                   key={`${m.provider}/${m.model_id}`}
                   className={clsx(
-                    'flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
+                    'flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-150',
                     provider === m.provider && modelId === m.model_id
-                      ? 'border-brand bg-brand/10'
-                      : 'border-gray-700 hover:border-gray-600',
+                      ? 'border-brand/60 bg-brand/10'
+                      : 'border-white/[0.06] hover:border-white/[0.12] bg-surface-2/60',
                   )}
                 >
                   <input
                     type="radio"
-                    className="mt-0.5"
+                    className="mt-0.5 accent-brand"
                     checked={provider === m.provider && modelId === m.model_id}
                     onChange={() => handleSelectModel(m)}
                   />
                   <div className="text-xs">
-                    <div className="font-medium text-gray-200">{m.model_id}</div>
-                    <div className="text-gray-500">{m.description}</div>
-                    <div className="text-gray-600 mt-0.5">dim={m.vector_dim}</div>
+                    <div className="font-semibold text-gray-200">{m.model_id}</div>
+                    <div className="text-gray-500 mt-0.5">{m.description}</div>
+                    <div className="text-gray-700 mt-0.5 font-mono">dim={m.vector_dim}</div>
                   </div>
                 </label>
               ))}
@@ -114,13 +128,13 @@ function CreateKBModal({ onClose }: { onClose: () => void }) {
           <button
             onClick={() => mutation.mutate()}
             disabled={!name.trim() || mutation.isPending}
-            className="btn-primary text-sm"
+            className="btn-primary text-sm px-5"
           >
-            {mutation.isPending ? '创建中...' : '创建'}
+            {mutation.isPending ? '创建中...' : '创建知识库'}
           </button>
         </div>
         {mutation.isError && (
-          <p className="text-red-400 text-xs mt-2">{mutation.error.message}</p>
+          <p className="text-red-400 text-xs mt-2 px-1">{mutation.error.message}</p>
         )}
       </div>
     </div>
@@ -129,6 +143,7 @@ function CreateKBModal({ onClose }: { onClose: () => void }) {
 
 function DocumentUploader({ kbId }: { kbId: string }) {
   const [uploading, setUploading] = useState(false)
+  const [isDragOver, setIsDragOver] = useState(false)
   const queryClient = useQueryClient()
 
   const handleFiles = async (files: FileList) => {
@@ -136,7 +151,6 @@ function DocumentUploader({ kbId }: { kbId: string }) {
     for (const file of Array.from(files)) {
       try {
         const doc = await documentsApi.upload(kbId, file)
-        // 轮询状态
         const poll = async () => {
           const status = await documentsApi.status(kbId, doc.id)
           if (status.status === 'indexed' || status.status === 'failed') {
@@ -155,11 +169,24 @@ function DocumentUploader({ kbId }: { kbId: string }) {
   }
 
   return (
-    <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-700 
-                       rounded-xl py-6 px-4 cursor-pointer hover:border-brand/50 transition-colors">
-      <Upload size={20} className="text-gray-500 mb-2" />
-      <span className="text-xs text-gray-500">
-        {uploading ? '上传中...' : '点击或拖拽上传 PDF / EPUB / Markdown'}
+    <label
+      className={clsx(
+        'flex flex-col items-center justify-center rounded-xl py-4 px-3 cursor-pointer transition-all duration-200 border-2 border-dashed',
+        isDragOver
+          ? 'border-brand/60 bg-brand/10'
+          : 'border-white/[0.08] hover:border-brand/40 hover:bg-brand/5',
+      )}
+      onDragOver={(e) => { e.preventDefault(); setIsDragOver(true) }}
+      onDragLeave={() => setIsDragOver(false)}
+      onDrop={(e) => { e.preventDefault(); setIsDragOver(false); e.dataTransfer.files && handleFiles(e.dataTransfer.files) }}
+    >
+      <Upload size={16} className={clsx('mb-1.5 transition-colors', isDragOver ? 'text-brand-light' : 'text-gray-600')} />
+      <span className="text-[11px] text-gray-600 text-center">
+        {uploading ? (
+          <span className="text-brand-light animate-pulse">上传中...</span>
+        ) : (
+          <>点击或拖拽文件<br /><span className="text-gray-700">PDF · EPUB · Markdown</span></>
+        )}
       </span>
       <input
         type="file"
@@ -242,122 +269,172 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-64 h-full flex flex-col bg-gray-900 border-r border-gray-800">
-      {/* Header */}
-      <div className="px-4 py-4 border-b border-gray-800">
-        <div className="flex items-center gap-2 mb-3">
-          <Database size={16} className="text-brand" />
-          <span className="font-semibold text-sm">书库知识库</span>
+    <aside
+      className="w-[268px] h-full flex flex-col shrink-0"
+      style={{
+        background: 'linear-gradient(180deg, #080a12 0%, #07090f 100%)',
+        borderRight: '1px solid rgba(255,255,255,0.05)',
+      }}
+    >
+      {/* Logo Header */}
+      <div className="px-4 py-4 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+        <div className="flex items-center gap-2.5 mb-4">
+          <div
+            className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: 'linear-gradient(135deg, #7c3aed, #3b82f6)', boxShadow: '0 4px 14px rgba(124,58,237,0.4)' }}
+          >
+            <BookOpen size={15} className="text-white" />
+          </div>
+          <div>
+            <div className="text-[13px] font-bold gradient-text leading-tight">AI 书库</div>
+            <div className="text-[10px] text-gray-700 leading-tight">知识库问答系统</div>
+          </div>
         </div>
+
         <button
           onClick={() => setShowCreateModal(true)}
-          className="btn-primary w-full text-xs flex items-center justify-center gap-1.5"
+          className="btn-primary w-full text-xs flex items-center justify-center gap-1.5 py-2"
         >
-          <Plus size={14} />
+          <Plus size={13} />
           新建知识库
         </button>
       </div>
 
       {/* KB List */}
-      <div className="flex-1 overflow-y-auto py-2">
+      <div className="flex-1 overflow-y-auto py-2 px-2">
+        {kbs.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-10 gap-2">
+            <Database size={22} className="text-gray-700" />
+            <p className="text-xs text-gray-700 text-center">暂无知识库<br />点击上方按钮创建</p>
+          </div>
+        )}
+
         {kbs.map((kb) => (
-          <div key={kb.id}>
-            {/* KB 行：chevron 独立控制展开，名字点击选中 */}
+          <div key={kb.id} className="mb-1">
+            {/* KB Row */}
             <div
               className={clsx(
-                'flex items-center gap-1 px-2 py-2 rounded-lg mx-1 group',
-                activeKB?.id === kb.id ? 'bg-gray-800' : 'hover:bg-gray-800/50',
+                'flex items-center gap-1.5 px-2.5 py-2 rounded-xl group transition-all duration-150',
+                activeKB?.id === kb.id
+                  ? 'bg-brand/10 border border-brand/20'
+                  : 'hover:bg-white/[0.04] border border-transparent',
               )}
             >
-              {/* chevron：仅控制文档面板展开/收起 */}
+              {/* Expand chevron */}
               <button
                 onClick={() => setExpandedKB(expandedKB === kb.id ? null : kb.id)}
-                className="p-0.5 text-gray-500 hover:text-gray-300 shrink-0"
+                className="p-0.5 text-gray-600 hover:text-gray-400 shrink-0 transition-colors"
               >
-                {expandedKB === kb.id ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                {expandedKB === kb.id
+                  ? <ChevronDown size={11} />
+                  : <ChevronRight size={11} />}
               </button>
-              {/* KB 名字：点击选中（切换活跃 KB，加载会话） */}
+
+              {/* KB icon */}
+              <div className={clsx(
+                'w-5 h-5 rounded-md flex items-center justify-center shrink-0',
+                activeKB?.id === kb.id ? 'bg-brand/20' : 'bg-white/[0.05]',
+              )}>
+                <Database size={10} className={activeKB?.id === kb.id ? 'text-brand-light' : 'text-gray-500'} />
+              </div>
+
+              {/* Name */}
               <button
                 onClick={() => handleSelectKB(kb.id)}
-                className="flex-1 text-left text-xs font-medium text-gray-200 truncate"
+                className={clsx(
+                  'flex-1 text-left text-xs font-medium truncate transition-colors',
+                  activeKB?.id === kb.id ? 'text-gray-100' : 'text-gray-400 hover:text-gray-200',
+                )}
               >
                 {kb.name}
               </button>
-              {/* 操作按钮（hover 显示） */}
-              <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 shrink-0">
+
+              {/* Actions */}
+              <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 shrink-0 transition-opacity">
                 <button
                   onClick={() => handleClearKB(kb.id)}
-                  className="p-0.5 text-gray-500 hover:text-yellow-400 transition-colors"
+                  className="btn-icon p-1"
                   title="清空向量库"
                 >
-                  <RefreshCw size={11} />
+                  <RefreshCw size={10} />
                 </button>
                 <button
                   onClick={() => handleDeleteKB(kb.id)}
-                  className="p-0.5 text-gray-500 hover:text-red-400 transition-colors"
+                  className="p-1 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-400/10 transition-all"
                   title="删除知识库"
                 >
-                  <Trash2 size={11} />
+                  <Trash2 size={10} />
                 </button>
               </div>
             </div>
 
-            {/* 文档面板（仅展开时显示） */}
+            {/* Document Panel */}
             {expandedKB === kb.id && (
-              <div className="mx-2 mb-2 space-y-1.5">
+              <div className="mx-1 mb-2 mt-1 space-y-1.5 animate-fade-in">
                 <DocumentUploader kbId={kb.id} />
                 {docs?.map((doc) => (
                   <div
                     key={doc.id}
-                    className="flex items-center gap-1.5 px-2 py-1 bg-gray-800/50 rounded-lg text-xs"
+                    className="flex items-center gap-2 px-2.5 py-1.5 bg-surface-2/60 rounded-lg text-xs border border-white/[0.04]"
                   >
                     <span
                       className={clsx(
                         'w-1.5 h-1.5 rounded-full shrink-0',
-                        doc.status === 'indexed' ? 'bg-green-500' :
-                        doc.status === 'processing' ? 'bg-yellow-500 animate-pulse' :
-                        doc.status === 'failed' ? 'bg-red-500' : 'bg-gray-500',
+                        doc.status === 'indexed' ? 'bg-emerald-500' :
+                        doc.status === 'processing' ? 'bg-amber-500 animate-pulse-slow' :
+                        doc.status === 'failed' ? 'bg-red-500' : 'bg-gray-600',
                       )}
                     />
-                    <span className="truncate text-gray-400">{doc.filename}</span>
+                    <span className="truncate text-gray-500 flex-1">{doc.filename}</span>
                     {doc.status === 'indexed' && (
-                      <span className="text-gray-600 shrink-0">{doc.chunk_count}块</span>
+                      <span className="text-gray-700 shrink-0 text-[10px]">{doc.chunk_count}</span>
                     )}
                   </div>
                 ))}
               </div>
             )}
 
-            {/* 会话列表：只要该 KB 是活跃 KB 就显示，与文档面板无关 */}
+            {/* Session List */}
             {activeKB?.id === kb.id && (
-              <div className="mx-2 mb-2">
+              <div className="mx-1 mb-2 animate-fade-in">
+                {/* Divider */}
+                <div className="flex items-center gap-2 px-1 mb-1.5">
+                  <div className="h-px flex-1 bg-white/[0.04]" />
+                  <span className="text-[10px] text-gray-700 font-medium">对话</span>
+                  <div className="h-px flex-1 bg-white/[0.04]" />
+                </div>
+
                 <button
                   onClick={handleNewSession}
-                  className="w-full text-xs text-gray-500 hover:text-gray-200 flex items-center gap-1.5 py-1.5 px-2 rounded-lg hover:bg-gray-800 transition-colors"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs text-gray-500 hover:text-gray-200 hover:bg-white/[0.05] transition-all duration-150 group"
                 >
-                  <Plus size={12} />
+                  <div className="w-4 h-4 rounded-md bg-white/[0.06] flex items-center justify-center group-hover:bg-brand/20 transition-colors">
+                    <Plus size={9} className="group-hover:text-brand-light transition-colors" />
+                  </div>
                   新对话
                 </button>
+
                 {sessions.map((s) => (
                   <div
                     key={s.id}
                     onClick={() => setActiveSession(s)}
                     className={clsx(
-                      'flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer group text-xs',
+                      'flex items-center gap-2 px-2.5 py-1.5 rounded-xl cursor-pointer group text-xs transition-all duration-150',
                       activeSession?.id === s.id
-                        ? 'bg-brand/20 text-brand-light'
-                        : 'text-gray-500 hover:bg-gray-800 hover:text-gray-300',
+                        ? 'bg-brand/15 text-brand-light border border-brand/20'
+                        : 'text-gray-500 hover:bg-white/[0.04] hover:text-gray-300 border border-transparent',
                     )}
                   >
+                    <MessageSquare size={10} className="shrink-0 opacity-60" />
                     <span className="flex-1 truncate">{s.title || '新会话'}</span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
                         sessionsApi.delete(s.id).then(() => removeSession(s.id))
                       }}
-                      className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-400"
+                      className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-400 transition-all"
                     >
-                      <X size={10} />
+                      <X size={9} />
                     </button>
                   </div>
                 ))}
@@ -367,24 +444,47 @@ export function Sidebar() {
         ))}
       </div>
 
+      {/* Footer */}
+      <div
+        className="px-4 py-3 shrink-0"
+        style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}
+      >
+        <div className="flex items-center gap-2">
+          <Sparkles size={11} className="text-brand/60" />
+          <span className="text-[10px] text-gray-700">Hybrid Search · BM25 + Dense · RRF</span>
+        </div>
+      </div>
+
       {showCreateModal && <CreateKBModal onClose={() => setShowCreateModal(false)} />}
     </aside>
   )
 }
 
 export function MainContent() {
-  const { activeSession, activeKB } = (() => ({
-    activeSession: useSessionStore((s) => s.activeSession),
-    activeKB: useKBStore((s) => s.activeKB),
-  }))()
+  const activeSession = useSessionStore((s) => s.activeSession)
+  const activeKB = useKBStore((s) => s.activeKB)
 
   if (!activeKB) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-600">
-        <div className="text-center">
-          <div className="text-5xl mb-4">📚</div>
-          <p className="text-gray-400 font-medium">选择或创建一个知识库</p>
-          <p className="text-sm mt-2">然后上传 PDF、EPUB 或 Markdown 文档开始问答</p>
+      <div className="flex-1 flex items-center justify-center bg-surface-0">
+        <div className="text-center animate-fade-in">
+          {/* Gradient orbs */}
+          <div className="relative mb-6 flex justify-center">
+            <div className="absolute w-32 h-32 rounded-full blur-3xl opacity-20"
+              style={{ background: 'radial-gradient(circle, #7c3aed, transparent)' }} />
+            <div className="absolute w-32 h-32 rounded-full blur-3xl opacity-20 translate-x-8"
+              style={{ background: 'radial-gradient(circle, #3b82f6, transparent)' }} />
+            <div
+              className="relative w-16 h-16 rounded-2xl flex items-center justify-center"
+              style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(59,130,246,0.2))', border: '1px solid rgba(124,58,237,0.3)' }}
+            >
+              <BookOpen size={28} className="text-brand-light" />
+            </div>
+          </div>
+          <h2 className="text-lg font-semibold gradient-text mb-2">电子书知识库</h2>
+          <p className="text-sm text-gray-600 max-w-xs leading-relaxed">
+            从左侧选择知识库，或创建新的知识库并上传 PDF、EPUB、Markdown 文档
+          </p>
         </div>
       </div>
     )
@@ -392,29 +492,44 @@ export function MainContent() {
 
   if (!activeSession) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-600">
-        <div className="text-center">
-          <div className="text-5xl mb-4">💬</div>
-          <p className="text-gray-400 font-medium">选择或新建一个会话</p>
-          <p className="text-sm mt-1">点击左侧「新对话」开始</p>
+      <div className="flex-1 flex items-center justify-center bg-surface-0">
+        <div className="text-center animate-fade-in">
+          <div
+            className="w-12 h-12 rounded-xl mx-auto mb-4 flex items-center justify-center"
+            style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(59,130,246,0.2))', border: '1px solid rgba(124,58,237,0.25)' }}
+          >
+            <MessageSquare size={20} className="text-brand-light" />
+          </div>
+          <p className="text-sm font-medium text-gray-400">{activeKB.name}</p>
+          <p className="text-xs text-gray-600 mt-1">点击左侧「新对话」开始提问</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* TopBar */}
-      <header className="flex items-center px-5 py-3 border-b border-gray-800 bg-gray-900">
+    <div className="flex-1 flex flex-col overflow-hidden bg-surface-0">
+      {/* Header */}
+      <header
+        className="flex items-center px-6 py-3 shrink-0"
+        style={{
+          background: 'rgba(7,8,14,0.8)',
+          backdropFilter: 'blur(12px)',
+          borderBottom: '1px solid rgba(255,255,255,0.05)',
+        }}
+      >
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-200 truncate">
+          <p className="text-sm font-semibold text-gray-200 truncate">
             {activeSession.title || '新会话'}
           </p>
-          <p className="text-xs text-gray-500 truncate">
-            {activeKB.name} · {activeSession.llm_provider}/{activeSession.llm_model_id}
+          <p className="text-[11px] text-gray-600 truncate mt-0.5">
+            <span className="text-brand/70">{activeKB.name}</span>
+            <span className="mx-1.5 text-gray-700">·</span>
+            {activeSession.llm_provider}/{activeSession.llm_model_id}
           </p>
         </div>
       </header>
+
       <ChatWindow sessionId={activeSession.id} />
     </div>
   )

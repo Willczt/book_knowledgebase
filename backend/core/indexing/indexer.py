@@ -1,5 +1,4 @@
 import asyncio
-import os
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -10,7 +9,6 @@ from config import get_settings
 from core.captioning.image_captioner import ImageCaptioner
 from core.chunking.text_splitter import RecursiveTextSplitter
 from core.embedding.base import EmbeddingProvider
-from core.embedding.registry import get_embedding_registry
 from core.llm.registry import get_caption_provider
 from core.parsers.base import ParsedChunk
 from core.parsers.epub_parser import EPUBParser
@@ -92,24 +90,44 @@ class DocumentIndexer:
             parsed_chunks.append(chunk)
         logger.info("✅ 解析完成", pages_or_sections=len(parsed_chunks))
 
-        # ── 阶段 2：分块 + 图片 Caption ─────────────────────────────
+        # ── 阶段 2：分块 + 图片 Caption（并发）──────────────────────
         logger.info("✂️  [2/5] 开始分块与图片描述生成")
+
+        # 2a: 保存所有图片到磁盘，收集 caption 任务
+        image_tasks: list[tuple[bytes, Optional[int], str]] = []
         for parsed in parsed_chunks:
-            # 处理图片
             for img in parsed.images:
                 img_filename = f"{uuid.uuid4()}.{img.ext}"
                 img_path = image_dir / img_filename
                 img_path.write_bytes(img.data)
                 relative_path = f"images/{self._kb.id}/{doc_id}/{img_filename}"
+                image_tasks.append((img.data, parsed.page_num, relative_path))
 
+        # 2b: 并发生成所有图片描述（最多 5 个并发 API 请求）
+        if image_tasks:
+            logger.info("🖼️  并行生成图片描述", total=len(image_tasks), concurrency=5)
+            sem = asyncio.Semaphore(5)
+            total_images = len(image_tasks)
+
+            async def _caption_one(
+                idx: int, img_data: bytes, page_num: Optional[int], relative_path: str
+            ) -> tuple[str, str, Optional[int]]:
+                async with sem:
+                    cap = await self._captioner.caption(img_data, page_num)
+                    if not cap:
+                        cap = f"[图片，页面 {page_num or '?'}]"
+                    logger.info(f"  ✅ 图片描述完成 {idx + 1}/{total_images}", page=page_num)
+                    return cap, relative_path, page_num
+
+            caption_results = await asyncio.gather(*[
+                _caption_one(i, img_data, page_num, rp)
+                for i, (img_data, page_num, rp) in enumerate(image_tasks)
+            ])
+
+            for cap, relative_path, page_num in caption_results:
                 image_count += 1
-                logger.info("🖼️  生成图片描述", image_index=image_count, page=parsed.page_num)
-                caption = await self._captioner.caption(img.data, parsed.page_num)
-                if not caption:
-                    caption = f"[图片，页面 {parsed.page_num or '?'}]"
-
                 chunk_points.append(ChunkPoint(
-                    text=f"[图片描述] {caption}",
+                    text=f"[图片描述] {cap}",
                     dense_vector=[],
                     sparse_indices=[],
                     sparse_values=[],
@@ -117,11 +135,12 @@ class DocumentIndexer:
                     source_doc=source_doc,
                     chunk_type="image_caption",
                     image_path=relative_path,
-                    page_num=parsed.page_num,
+                    page_num=page_num,
                     chunk_index=len(chunk_points),
                 ))
 
-            # 处理文字
+        # 2c: 文字分块
+        for parsed in parsed_chunks:
             if parsed.text.strip():
                 sub_chunks = self._text_splitter.split_text(
                     parsed.text,

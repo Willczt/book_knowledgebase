@@ -5,6 +5,7 @@ import { useSSEChat } from '../../hooks/useSSEChat'
 import { useSessionStore } from '../../stores/sessionStore'
 import { sessionsApi } from '../../api/sessions'
 import type { Message } from '../../types/api'
+import { BookOpen } from 'lucide-react'
 
 interface ChatWindowProps {
   sessionId: string
@@ -75,29 +76,62 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* 消息列表 */}
+      {/* Messages */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-6 py-6 space-y-1"
+        className="flex-1 overflow-y-auto"
       >
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-gray-600">
-            <div className="text-4xl mb-3">📚</div>
-            <p className="text-base font-medium text-gray-500">开始提问</p>
-            <p className="text-sm mt-1">基于知识库中的文档回答你的问题</p>
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-4 px-6 pb-16 animate-fade-in">
+            {/* Icon */}
+            <div className="relative">
+              <div
+                className="w-14 h-14 rounded-2xl flex items-center justify-center"
+                style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.3) 0%, rgba(59,130,246,0.3) 100%)' }}
+              >
+                <BookOpen size={26} className="text-brand-light" />
+              </div>
+              <div
+                className="absolute inset-0 rounded-2xl blur-xl opacity-50"
+                style={{ background: 'linear-gradient(135deg, #7c3aed, #3b82f6)' }}
+              />
+            </div>
+            <div className="text-center">
+              <h3 className="text-base font-semibold text-gray-200">开始向知识库提问</h3>
+              <p className="text-sm text-gray-600 mt-1.5 max-w-sm leading-relaxed">
+                基于你上传的文档进行语义检索，支持文字和图片输入
+              </p>
+            </div>
+            {/* Hint chips */}
+            <div className="flex flex-wrap gap-2 justify-center max-w-md">
+              {['这本书的主要观点是什么？', '第一章讲了什么？', '帮我总结核心概念'].map((hint) => (
+                <button
+                  key={hint}
+                  onClick={() => handleSend(hint)}
+                  className="px-3 py-1.5 rounded-xl bg-surface-2 border border-white/[0.07] text-xs text-gray-500 hover:text-gray-300 hover:border-brand/40 hover:bg-brand/5 transition-all duration-150"
+                >
+                  {hint}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="max-w-3xl mx-auto px-6 py-6">
+            {messages.map((msg, idx) => (
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                isStreaming={isStreaming && idx === messages.length - 1 && msg.role === 'assistant'}
+              />
+            ))}
           </div>
         )}
-        {messages.map((msg, idx) => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            isStreaming={isStreaming && idx === messages.length - 1 && msg.role === 'assistant'}
-          />
-        ))}
       </div>
 
-      {/* 输入框 */}
-      <ChatInput onSend={handleSend} disabled={isStreaming} />
+      {/* Input */}
+      <div className="max-w-3xl mx-auto w-full">
+        <ChatInput onSend={handleSend} disabled={isStreaming} />
+      </div>
     </div>
   )
 }
