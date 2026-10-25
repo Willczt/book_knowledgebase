@@ -36,6 +36,20 @@ class KnowledgeBaseResponse(BaseModel):
     updated_at: datetime
 
 
+class KnowledgeBaseUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = None
+
+
+class KnowledgeBaseImportResult(BaseModel):
+    id: str
+    name: str
+    documents: int
+    sessions: int
+    messages: int
+    vectors: int
+
+
 class KnowledgeBaseStats(BaseModel):
     total_docs: int
     indexed_docs: int
@@ -121,6 +135,13 @@ class SessionResponse(BaseModel):
 # ========================
 # Message
 # ========================
+
+class SessionImportResult(BaseModel):
+    id: str
+    kb_id: str
+    title: Optional[str]
+    messages: int
+
 
 class MessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

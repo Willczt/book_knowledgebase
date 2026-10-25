@@ -26,6 +26,27 @@ export interface KnowledgeBaseCreate {
   caption_model_id?: string
 }
 
+export interface KnowledgeBaseUpdate {
+  name?: string
+  description?: string
+}
+
+export interface KnowledgeBaseImportResult {
+  id: string
+  name: string
+  documents: number
+  sessions: number
+  messages: number
+  vectors: number
+}
+
+export interface SessionImportResult {
+  id: string
+  kb_id: string
+  title?: string
+  messages: number
+}
+
 export interface KnowledgeBaseStats {
   total_docs: number
   indexed_docs: number

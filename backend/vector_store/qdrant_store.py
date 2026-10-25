@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
@@ -36,6 +36,30 @@ class ChunkPoint:
     page_num: Optional[int] = None
     chunk_index: int = 0
     extra_metadata: dict = field(default_factory=dict)
+
+
+def _dump_sparse(value: Any) -> dict:
+    return {
+        "indices": [int(i) for i in (getattr(value, "indices", None) or [])],
+        "values": [float(v) for v in (getattr(value, "values", None) or [])],
+    }
+
+
+def _dump_vector(vector: Any) -> dict:
+    """把 Qdrant 返回的向量（命名向量 dict / 稀疏向量 / 稠密列表）转成可 JSON 化的结构。"""
+    if vector is None:
+        return {}
+    if isinstance(vector, dict):
+        dumped: dict = {}
+        for name, value in vector.items():
+            if hasattr(value, "indices"):
+                dumped[name] = _dump_sparse(value)
+            else:
+                dumped[name] = [float(x) for x in value]
+        return dumped
+    if hasattr(vector, "indices"):
+        return {"sparse": _dump_sparse(vector)}
+    return {"dense": [float(x) for x in vector]}
 
 
 @dataclass
@@ -200,6 +224,64 @@ class QdrantVectorStore:
             return info.points_count or 0
         except Exception:
             return 0
+
+    async def scroll_all(self, collection_name: str, batch_size: int = 256) -> list[dict]:
+        """导出用：逐页拉取集合内所有点（含向量与 payload），序列化为纯 Python 结构。"""
+        points: list[dict] = []
+        offset: Any = None
+        exists = await self.client.collection_exists(collection_name)
+        if not exists:
+            return points
+        while True:
+            records, offset = await self.client.scroll(
+                collection_name=collection_name,
+                limit=batch_size,
+                offset=offset,
+                with_payload=True,
+                with_vectors=True,
+            )
+            for record in records:
+                points.append({
+                    "id": str(record.id),
+                    "vector": _dump_vector(record.vector),
+                    "payload": dict(record.payload or {}),
+                })
+            if offset is None:
+                break
+        return points
+
+    async def upsert_raw(self, collection_name: str, points: list[dict]) -> int:
+        """导入用：写入 scroll_all() 导出的原始点结构，返回写入数量。"""
+        structs = []
+        for point in points:
+            vector = point.get("vector") or {}
+            vector_body: dict = {}
+            dense = vector.get("dense")
+            if dense:
+                vector_body["dense"] = dense
+            sparse = vector.get("sparse") or {}
+            if sparse.get("indices"):
+                vector_body["sparse"] = SparseVector(
+                    indices=sparse["indices"],
+                    values=sparse["values"],
+                )
+            if not vector_body:
+                continue
+            structs.append(
+                PointStruct(
+                    id=point.get("id") or str(uuid.uuid4()),
+                    vector=vector_body,
+                    payload=point.get("payload") or {},
+                )
+            )
+
+        for start in range(0, len(structs), 256):
+            await self.client.upsert(
+                collection_name=collection_name,
+                points=structs[start : start + 256],
+                wait=True,
+            )
+        return len(structs)
 
     async def close(self) -> None:
         if self._client:

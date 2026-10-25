@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Plus, Trash2, Upload, X, ChevronDown, ChevronRight,
+  Plus, Trash2, Upload, Download, Pencil, X, ChevronDown, ChevronRight,
   RefreshCw, Database, BookOpen, MessageSquare, Sparkles,
 } from 'lucide-react'
 import { knowledgeBaseApi } from '../../api/knowledgeBase'
@@ -11,14 +11,68 @@ import { systemApi } from '../../api/system'
 import { useKBStore } from '../../stores/kbStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { ChatWindow } from '../chat/ChatWindow'
+import { APP_NAME, APP_TAGLINE } from '../../branding'
 import type {
   Document,
   EmbeddingModelInfo,
   HealthResponse,
   IngestProgress,
+  KnowledgeBase,
   LLMProviderInfo,
+  Session,
 } from '../../types/api'
 import clsx from 'clsx'
+
+/** 触发浏览器下载 */
+function downloadBlob(data: Blob, filename: string) {
+  const url = URL.createObjectURL(data)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+/** 行内重命名输入框：Enter 提交，Esc 取消，失焦提交 */
+function InlineRename({
+  value,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  value: string
+  onChange: (v: string) => void
+  onSubmit: () => void
+  onCancel: () => void
+}) {
+  // Enter 提交后输入框会卸载并触发一次 blur，用 ref 防止重复提交
+  const submitted = useRef(false)
+  const submit = () => {
+    if (submitted.current) return
+    submitted.current = true
+    onSubmit()
+  }
+
+  return (
+    <input
+      className="flex-1 min-w-0 bg-white/[0.06] border border-brand/40 rounded-md px-1.5 py-0.5 text-xs text-gray-100 outline-none focus:border-brand"
+      value={value}
+      autoFocus
+      onChange={(e) => onChange(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onBlur={submit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') submit()
+        if (e.key === 'Escape') {
+          submitted.current = true
+          onCancel()
+        }
+      }}
+    />
+  )
+}
 
 function CreateKBModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('')
@@ -286,9 +340,16 @@ function useIngestProgress(
 export function Sidebar() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [expandedKB, setExpandedKB] = useState<string | null>(null)
-  const { kbs, setKBs, activeKB, setActiveKB, removeKB } = useKBStore()
-  const { sessions, setSessions, activeSession, setActiveSession, addSession, removeSession } =
-    useSessionStore()
+  const [editingKB, setEditingKB] = useState<{ id: string; value: string } | null>(null)
+  const [editingSession, setEditingSession] = useState<{ id: string; value: string } | null>(null)
+  const [busyIds, setBusyIds] = useState<Record<string, boolean>>({})
+  const kbImportRef = useRef<HTMLInputElement>(null)
+  const sessionImportRef = useRef<HTMLInputElement>(null)
+  const { kbs, setKBs, activeKB, setActiveKB, removeKB, updateKB } = useKBStore()
+  const {
+    sessions, setSessions, activeSession, setActiveSession,
+    addSession, removeSession, updateSession,
+  } = useSessionStore()
   const queryClient = useQueryClient()
 
   const { data: llmProviders } = useQuery<LLMProviderInfo[]>({
@@ -374,6 +435,87 @@ export function Sidebar() {
     queryClient.invalidateQueries({ queryKey: ['documents', kbId] })
   }
 
+  const markBusy = (key: string, value: boolean) =>
+    setBusyIds((prev) => ({ ...prev, [key]: value }))
+
+  const handleRenameKB = async (kb: KnowledgeBase, value: string) => {
+    setEditingKB(null)
+    const name = value.trim()
+    if (!name || name === kb.name) return
+    try {
+      const updated = await knowledgeBaseApi.update(kb.id, { name })
+      updateKB(updated)
+      queryClient.invalidateQueries({ queryKey: ['kbs'] })
+    } catch (e) {
+      alert(`重命名失败：${(e as Error).message}`)
+    }
+  }
+
+  const handleRenameSession = async (session: Session, value: string) => {
+    setEditingSession(null)
+    const title = value.trim()
+    if (!title || title === session.title) return
+    try {
+      const updated = await sessionsApi.update(session.id, { title })
+      updateSession(updated)
+    } catch (e) {
+      alert(`重命名失败：${(e as Error).message}`)
+    }
+  }
+
+  const handleExportKB = async (kb: KnowledgeBase) => {
+    if (busyIds[kb.id]) return
+    markBusy(kb.id, true)
+    try {
+      const blob = await knowledgeBaseApi.exportArchive(kb.id)
+      downloadBlob(blob, `${kb.name}.kbz.zip`)
+    } catch (e) {
+      alert(`导出失败：${(e as Error).message}`)
+    } finally {
+      markBusy(kb.id, false)
+    }
+  }
+
+  const handleImportKB = async (file: File) => {
+    try {
+      const result = await knowledgeBaseApi.importArchive(file)
+      const list = await knowledgeBaseApi.list()
+      setKBs(list)
+      queryClient.invalidateQueries({ queryKey: ['kbs'] })
+      const imported = list.find((k) => k.id === result.id)
+      if (imported) {
+        setActiveKB(imported)
+        setExpandedKB(imported.id)
+        await loadSessions(imported.id)
+      }
+      alert(
+        `导入完成：${result.documents} 个文档 · ${result.vectors} 条向量 · ` +
+        `${result.sessions} 个会话 · ${result.messages} 条消息`,
+      )
+    } catch (e) {
+      // 409：知识库已存在（同一归档不能重复导入）
+      alert((e as Error).message)
+    }
+  }
+
+  const handleExportSession = async (session: Session) => {
+    try {
+      const blob = await sessionsApi.exportArchive(session.id)
+      downloadBlob(blob, `${session.title || 'session'}.session.zip`)
+    } catch (e) {
+      alert(`导出失败：${(e as Error).message}`)
+    }
+  }
+
+  const handleImportSession = async (kbId: string, file: File) => {
+    try {
+      await sessionsApi.importArchive(kbId, file)
+      await loadSessions(kbId)
+    } catch (e) {
+      alert(`会话导入失败：${(e as Error).message}`)
+    }
+  }
+
   return (
     <aside
       className="w-[268px] h-full flex flex-col shrink-0"
@@ -392,18 +534,38 @@ export function Sidebar() {
             <BookOpen size={15} className="text-white" />
           </div>
           <div>
-            <div className="text-[13px] font-bold gradient-text leading-tight">AI 书库</div>
-            <div className="text-[10px] text-gray-700 leading-tight">知识库问答系统</div>
+            <div className="text-[13px] font-bold gradient-text leading-tight">{APP_NAME}</div>
+            <div className="text-[10px] text-gray-700 leading-tight">{APP_TAGLINE}</div>
           </div>
         </div>
 
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="btn-primary w-full text-xs flex items-center justify-center gap-1.5 py-2"
-        >
-          <Plus size={13} />
-          新建知识库
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="btn-primary flex-1 text-xs flex items-center justify-center gap-1.5 py-2"
+          >
+            <Plus size={13} />
+            新建知识库
+          </button>
+          <button
+            onClick={() => kbImportRef.current?.click()}
+            className="btn-ghost p-2 shrink-0"
+            title="导入知识库（.kbz.zip）"
+          >
+            <Upload size={13} />
+          </button>
+          <input
+            ref={kbImportRef}
+            type="file"
+            accept=".zip"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (file) handleImportKB(file)
+            }}
+          />
+        </div>
       </div>
 
       {/* KB List */}
@@ -445,18 +607,44 @@ export function Sidebar() {
               </div>
 
               {/* Name */}
-              <button
-                onClick={() => handleSelectKB(kb.id)}
-                className={clsx(
-                  'flex-1 text-left text-xs font-medium truncate transition-colors',
-                  activeKB?.id === kb.id ? 'text-gray-100' : 'text-gray-400 hover:text-gray-200',
-                )}
-              >
-                {kb.name}
-              </button>
+              {editingKB?.id === kb.id ? (
+                <InlineRename
+                  value={editingKB.value}
+                  onChange={(value) => setEditingKB({ id: kb.id, value })}
+                  onSubmit={() => handleRenameKB(kb, editingKB.value)}
+                  onCancel={() => setEditingKB(null)}
+                />
+              ) : (
+                <button
+                  onClick={() => handleSelectKB(kb.id)}
+                  onDoubleClick={() => setEditingKB({ id: kb.id, value: kb.name })}
+                  title={kb.name}
+                  className={clsx(
+                    'flex-1 min-w-0 text-left text-xs font-medium truncate transition-colors',
+                    activeKB?.id === kb.id ? 'text-gray-100' : 'text-gray-400 hover:text-gray-200',
+                  )}
+                >
+                  {kb.name}
+                </button>
+              )}
 
               {/* Actions */}
               <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 shrink-0 transition-opacity">
+                <button
+                  onClick={() => setEditingKB({ id: kb.id, value: kb.name })}
+                  className="btn-icon p-1"
+                  title="重命名"
+                >
+                  <Pencil size={10} />
+                </button>
+                <button
+                  onClick={() => handleExportKB(kb)}
+                  className={clsx('btn-icon p-1', busyIds[kb.id] && 'animate-pulse')}
+                  title="导出知识库（含向量库）"
+                  disabled={!!busyIds[kb.id]}
+                >
+                  <Download size={10} />
+                </button>
                 <button
                   onClick={() => handleClearKB(kb.id)}
                   className="btn-icon p-1"
@@ -550,6 +738,24 @@ export function Sidebar() {
                   <div className="h-px flex-1 bg-white/[0.04]" />
                   <span className="text-[10px] text-gray-700 font-medium">对话</span>
                   <div className="h-px flex-1 bg-white/[0.04]" />
+                  <button
+                    onClick={() => sessionImportRef.current?.click()}
+                    className="p-0.5 text-gray-700 hover:text-brand-light transition-colors"
+                    title="导入会话（.session.zip）"
+                  >
+                    <Upload size={9} />
+                  </button>
+                  <input
+                    ref={sessionImportRef}
+                    type="file"
+                    accept=".zip"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      e.target.value = ''
+                      if (file && kb.id) handleImportSession(kb.id, file)
+                    }}
+                  />
                 </div>
 
                 <button
@@ -574,16 +780,57 @@ export function Sidebar() {
                     )}
                   >
                     <MessageSquare size={10} className="shrink-0 opacity-60" />
-                    <span className="flex-1 truncate">{s.title || '新会话'}</span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        sessionsApi.delete(s.id).then(() => removeSession(s.id))
-                      }}
-                      className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-400 transition-all"
-                    >
-                      <X size={9} />
-                    </button>
+                    {editingSession?.id === s.id ? (
+                      <InlineRename
+                        value={editingSession.value}
+                        onChange={(value) => setEditingSession({ id: s.id, value })}
+                        onSubmit={() => handleRenameSession(s, editingSession.value)}
+                        onCancel={() => setEditingSession(null)}
+                      />
+                    ) : (
+                      <span
+                        className="flex-1 truncate"
+                        onDoubleClick={(e) => {
+                          e.stopPropagation()
+                          setEditingSession({ id: s.id, value: s.title || '' })
+                        }}
+                        title={s.title || '新会话'}
+                      >
+                        {s.title || '新会话'}
+                      </span>
+                    )}
+                    <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 shrink-0 transition-opacity">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setEditingSession({ id: s.id, value: s.title || '' })
+                        }}
+                        className="p-0.5 hover:text-brand-light transition-all"
+                        title="重命名会话"
+                      >
+                        <Pencil size={9} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleExportSession(s)
+                        }}
+                        className="p-0.5 hover:text-brand-light transition-all"
+                        title="导出会话"
+                      >
+                        <Download size={9} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          sessionsApi.delete(s.id).then(() => removeSession(s.id))
+                        }}
+                        className="p-0.5 hover:text-red-400 transition-all"
+                        title="删除会话"
+                      >
+                        <X size={9} />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -656,7 +903,8 @@ export function MainContent() {
               <BookOpen size={28} className="text-brand-light" />
             </div>
           </div>
-          <h2 className="text-lg font-semibold gradient-text mb-2">电子书知识库</h2>
+          <h2 className="text-lg font-semibold gradient-text mb-2">{APP_NAME}</h2>
+          <p className="text-[11px] tracking-[0.3em] text-gray-700 uppercase mb-2">Langhuan</p>
           <p className="text-sm text-gray-600 max-w-xs leading-relaxed">
             从左侧选择知识库，或创建新的知识库并上传 PDF、EPUB、Markdown、TXT 文档
           </p>

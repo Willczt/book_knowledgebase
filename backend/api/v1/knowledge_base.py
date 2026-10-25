@@ -1,20 +1,37 @@
+import io
 import uuid
-from typing import Annotated
+from typing import Annotated, Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db, get_kb_or_404, get_qdrant
+from core import transfer
 from db import crud
 from db.models import KnowledgeBase
 from db.schemas import (
     KnowledgeBaseCreate,
+    KnowledgeBaseImportResult,
     KnowledgeBaseResponse,
     KnowledgeBaseStats,
+    KnowledgeBaseUpdate,
 )
 from vector_store.qdrant_store import QdrantVectorStore
 
 router = APIRouter(prefix="/knowledge-bases", tags=["Knowledge Base"])
+
+
+def _zip_response(data: bytes, filename: str) -> StreamingResponse:
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "X-Archive-Size": str(len(data)),
+        },
+    )
 
 
 @router.post("", response_model=KnowledgeBaseResponse, status_code=status.HTTP_201_CREATED)
@@ -53,6 +70,71 @@ async def create_knowledge_base(
 @router.get("", response_model=list[KnowledgeBaseResponse])
 async def list_knowledge_bases(db: Annotated[AsyncSession, Depends(get_db)]):
     return await crud.list_kbs(db)
+
+
+@router.post("/import", response_model=KnowledgeBaseImportResult, status_code=status.HTTP_201_CREATED)
+async def import_knowledge_base(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    qdrant: Annotated[QdrantVectorStore, Depends(get_qdrant)],
+    file: UploadFile = File(...),
+    name: Optional[str] = None,
+):
+    """导入知识库归档包（含文档、图片、向量库与历史会话）。"""
+    archive = await file.read()
+    try:
+        result = await transfer.import_kb(db, qdrant, archive, name=name)
+    except transfer.KnowledgeBaseExists as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"导入失败：{e}",
+        )
+
+    kb = result["kb"]
+    return KnowledgeBaseImportResult(
+        id=kb.id,
+        name=kb.name,
+        documents=result["documents"],
+        sessions=result["sessions"],
+        messages=result["messages"],
+        vectors=result["vectors"],
+    )
+
+
+@router.patch("/{kb_id}", response_model=KnowledgeBaseResponse)
+async def update_knowledge_base(
+    kb: Annotated[KnowledgeBase, Depends(get_kb_or_404)],
+    body: KnowledgeBaseUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """重命名 / 修改描述。embedding 等锁定字段不可改。"""
+    data = body.model_dump(exclude_unset=True)
+    if not data:
+        return kb
+    if "name" in data:
+        name = (data["name"] or "").strip()
+        if not name:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="知识库名称不能为空",
+            )
+        data["name"] = name
+    return await crud.update_kb(db, kb, data)
+
+
+@router.get("/{kb_id}/export")
+async def export_knowledge_base(
+    kb: Annotated[KnowledgeBase, Depends(get_kb_or_404)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    qdrant: Annotated[QdrantVectorStore, Depends(get_qdrant)],
+):
+    """导出知识库：元数据 + 文档 + 图片 + 向量库快照 + 历史会话。"""
+    archive = await transfer.export_kb(db, kb, qdrant)
+    filename = f"{transfer.safe_filename(kb.name, 'knowledge-base')}.kbz.zip"
+    return _zip_response(archive, filename)
 
 
 @router.get("/{kb_id}", response_model=KnowledgeBaseResponse)

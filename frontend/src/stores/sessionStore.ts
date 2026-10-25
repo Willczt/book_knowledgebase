@@ -8,6 +8,7 @@ interface SessionStore {
   setSessions: (sessions: Session[]) => void
   setActiveSession: (session: Session | null) => void
   addSession: (session: Session) => void
+  updateSession: (session: Session) => void
   removeSession: (id: string) => void
   setMessages: (messages: Message[]) => void
   appendMessage: (message: Message) => void
@@ -22,6 +23,11 @@ export const useSessionStore = create<SessionStore>((set) => ({
   setActiveSession: (session) => set({ activeSession: session, messages: [] }),
   addSession: (session) =>
     set((state) => ({ sessions: [session, ...state.sessions] })),
+  updateSession: (session) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) => (s.id === session.id ? session : s)),
+      activeSession: state.activeSession?.id === session.id ? session : state.activeSession,
+    })),
   removeSession: (id) =>
     set((state) => ({
       sessions: state.sessions.filter((s) => s.id !== id),

@@ -1,13 +1,23 @@
+import io
 import uuid
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db, get_session_or_404
+from core import transfer
 from db import crud
 from db.models import Session
-from db.schemas import MessageResponse, SessionCreate, SessionResponse, SessionUpdate
+from db.schemas import (
+    MessageResponse,
+    SessionCreate,
+    SessionImportResult,
+    SessionResponse,
+    SessionUpdate,
+)
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
@@ -42,6 +52,51 @@ async def list_sessions(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     return await crud.list_sessions(db, kb_id)
+
+
+@router.post("/import", response_model=SessionImportResult, status_code=status.HTTP_201_CREATED)
+async def import_session(
+    kb_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    file: UploadFile = File(...),
+):
+    """把导出的会话归档导入到指定知识库。"""
+    archive = await file.read()
+    try:
+        session = await transfer.import_session(db, archive, kb_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"会话导入失败：{e}",
+        )
+
+    return SessionImportResult(
+        id=session.id,
+        kb_id=session.kb_id,
+        title=session.title,
+        messages=await crud.count_messages(db, session.id),
+    )
+
+
+@router.get("/{session_id}/export")
+async def export_session(
+    session: Annotated[Session, Depends(get_session_or_404)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """导出会话：标题、模型配置、全部消息与消息附图。"""
+    archive = await transfer.export_session(db, session)
+    stem = session.title or f"session-{session.id[:8]}"
+    filename = f"{transfer.safe_filename(stem, 'session')}.session.zip"
+    return StreamingResponse(
+        io.BytesIO(archive),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "X-Archive-Size": str(len(archive)),
+        },
+    )
 
 
 @router.get("/{session_id}", response_model=SessionResponse)

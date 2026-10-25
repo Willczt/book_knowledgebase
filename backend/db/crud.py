@@ -6,6 +6,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Document, KnowledgeBase, Message, Session
 
+# embedding 模型与向量集合在创建后锁定，改名字时不允许顺带改掉
+_KB_IMMUTABLE_FIELDS = {
+    "id",
+    "embedding_provider",
+    "embedding_model_id",
+    "embedding_vector_dim",
+    "embedding_is_multimodal",
+    "qdrant_collection_name",
+    "created_at",
+}
+
 
 # ========================
 # KnowledgeBase CRUD
@@ -27,6 +38,17 @@ async def get_kb(db: AsyncSession, kb_id: str) -> Optional[KnowledgeBase]:
 async def list_kbs(db: AsyncSession) -> list[KnowledgeBase]:
     result = await db.execute(select(KnowledgeBase).order_by(KnowledgeBase.created_at.desc()))
     return list(result.scalars().all())
+
+
+async def update_kb(db: AsyncSession, kb: KnowledgeBase, data: dict) -> KnowledgeBase:
+    """更新 KB 元数据（仅允许 name / description 等可变字段）。"""
+    for key, value in data.items():
+        if key in _KB_IMMUTABLE_FIELDS:
+            continue
+        setattr(kb, key, value)
+    await db.commit()
+    await db.refresh(kb)
+    return kb
 
 
 async def delete_kb(db: AsyncSession, kb: KnowledgeBase) -> None:
