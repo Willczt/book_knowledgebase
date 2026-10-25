@@ -51,12 +51,48 @@ export interface Document {
   created_at: string
 }
 
+export interface IngestProgress {
+  stage: string
+  stage_label: string
+  percent: number
+  current?: number | null
+  total?: number | null
+  message?: string | null
+}
+
 export interface DocumentStatus {
   id: string
   status: string
   chunk_count: number
   image_count: number
   error_message?: string
+  progress?: IngestProgress | null
+}
+
+export interface ProviderHealth {
+  ok: boolean
+  url?: string
+  configured?: boolean
+  latency_ms?: number
+  error?: string
+  model?: string
+  model_count?: number
+  has_embedding_model?: boolean
+  has_vision_model?: boolean
+  model_exists?: boolean
+  supports_vision?: boolean
+  note?: string
+}
+
+export interface HealthResponse {
+  status: 'ok' | 'degraded'
+  db: string
+  qdrant: string
+  providers: {
+    ollama: ProviderHealth
+    deepseek: ProviderHealth
+    ark: ProviderHealth
+  }
 }
 
 export interface Session {

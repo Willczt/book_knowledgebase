@@ -1,10 +1,11 @@
 from typing import Optional
 
 from openai import AsyncOpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from config import get_settings
 from core.embedding.base import EmbeddingModelInfo, EmbeddingProvider
+from core.error_mapping import friendly_embedding_error, is_retryable
 
 settings = get_settings()
 
@@ -23,7 +24,10 @@ class VLLMEmbedding(EmbeddingProvider):
         self._vector_dim = vector_dim
         url = base_url or settings.vllm_base_url or "http://localhost:8000"
         key = api_key or settings.vllm_api_key
-        self._client = AsyncOpenAI(base_url=url, api_key=key)
+        self._base_url = url
+        self._client = AsyncOpenAI(
+            base_url=url, api_key=key, timeout=settings.embedding_timeout
+        )
 
     @property
     def model_info(self) -> EmbeddingModelInfo:
@@ -36,12 +40,38 @@ class VLLMEmbedding(EmbeddingProvider):
             description=f"vLLM Embedding ({self._model_id})",
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    def _friendly(self, exc: Exception) -> Exception:
+        return friendly_embedding_error(
+            exc,
+            provider="vllm",
+            base_url=self._base_url,
+            model_id=self._model_id,
+            timeout=settings.embedding_timeout,
+        )
+
     async def embed_documents(
         self,
         texts: list[str],
         images: Optional[list[Optional[bytes]]] = None,
     ) -> list[list[float]]:
+        try:
+            return await self._embed_documents(texts)
+        except Exception as exc:
+            raise self._friendly(exc) from exc
+
+    async def embed_query(self, text: str, image: Optional[bytes] = None) -> list[float]:
+        try:
+            return await self._embed_query(text)
+        except Exception as exc:
+            raise self._friendly(exc) from exc
+
+    @retry(
+        retry=retry_if_exception(is_retryable),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    async def _embed_documents(self, texts: list[str]) -> list[list[float]]:
         batch_size = self.model_info.max_batch_size
         results = []
         for i in range(0, len(texts), batch_size):
@@ -50,7 +80,12 @@ class VLLMEmbedding(EmbeddingProvider):
             results.extend([item.embedding for item in sorted(response.data, key=lambda x: x.index)])
         return results
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-    async def embed_query(self, text: str, image: Optional[bytes] = None) -> list[float]:
+    @retry(
+        retry=retry_if_exception(is_retryable),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    async def _embed_query(self, text: str) -> list[float]:
         response = await self._client.embeddings.create(model=self._model_id, input=[text])
         return response.data[0].embedding

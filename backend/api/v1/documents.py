@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -12,6 +13,7 @@ from config import get_settings
 from db import crud
 from db.models import KnowledgeBase
 from db.schemas import DocumentResponse, DocumentStatusResponse
+from tasks import progress as ingest_progress
 from tasks.ingest_task import run_ingest_task
 from vector_store.qdrant_store import QdrantVectorStore
 from api.deps import get_qdrant
@@ -19,7 +21,7 @@ from api.deps import get_qdrant
 router = APIRouter(prefix="/knowledge-bases", tags=["Documents"])
 settings = get_settings()
 
-ALLOWED_EXTENSIONS = {".pdf", ".epub", ".md", ".markdown"}
+ALLOWED_EXTENSIONS = {".pdf", ".epub", ".md", ".markdown", ".txt", ".text"}
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
 
 
@@ -106,12 +108,19 @@ async def get_document_status(
     doc = await crud.get_document(db, doc_id)
     if doc is None or doc.kb_id != kb.id:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # 摄入进度只存在于进程内存，仅处理中才有意义
+    progress_data = None
+    if doc.status in ("pending", "processing"):
+        progress_data = ingest_progress.get(doc_id)
+
     return DocumentStatusResponse(
         id=doc.id,
         status=doc.status,
         chunk_count=doc.chunk_count,
         image_count=doc.image_count,
         error_message=doc.error_message,
+        progress=progress_data,
     )
 
 
@@ -145,6 +154,14 @@ async def delete_document(
     try:
         if os.path.exists(doc.file_path):
             os.remove(doc.file_path)
+    except Exception:
+        pass
+
+    # 删除该文档提取出的图片，避免磁盘泄漏
+    try:
+        image_dir = Path(settings.storage_root) / "images" / kb.id / doc_id
+        if image_dir.exists():
+            shutil.rmtree(image_dir, ignore_errors=True)
     except Exception:
         pass
 

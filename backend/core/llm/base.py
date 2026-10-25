@@ -26,6 +26,8 @@ class LLMConfig:
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     timeout: int = 120
+    # 推理强度："low" | "high" | "max"（DeepSeek 等支持），None 用服务端默认
+    reasoning_effort: Optional[str] = None
 
 
 class LLMProvider(ABC):
@@ -50,3 +52,11 @@ class LLMProvider(ABC):
         不支持视觉的提供商（如 DeepSeek）应 raise NotImplementedError。
         """
         ...
+
+    async def probe(self) -> bool:
+        """
+        检查该提供商当前的视觉能力是否可用（只需一次轻量请求）。
+        默认认为可用；不支持视觉的提供商应返回 False。
+        用于图片 caption 前的一次性探测，避免逐张图超时重试。
+        """
+        return True

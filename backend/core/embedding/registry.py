@@ -49,6 +49,18 @@ AVAILABLE_EMBEDDING_MODELS: list[EmbeddingModelInfo] = [
 ]
 
 
+def get_available_embedding_models() -> list[EmbeddingModelInfo]:
+    """按当前配置过滤出可用的 embedding 模型（缺少凭据的 provider 不返回）"""
+    available: list[EmbeddingModelInfo] = []
+    for m in AVAILABLE_EMBEDDING_MODELS:
+        if m.provider == "doubao" and not settings.ark_api_key:
+            continue
+        if m.provider == "vllm" and not settings.vllm_base_url:
+            continue
+        available.append(m)
+    return available
+
+
 class EmbeddingRegistry:
     """
     管理所有 EmbeddingProvider 实例。

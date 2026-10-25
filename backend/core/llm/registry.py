@@ -1,5 +1,7 @@
 from typing import Optional
 
+import structlog
+
 from config import get_settings
 from core.exceptions import LLMProviderNotConfigured
 from core.llm.base import LLMConfig, LLMProvider
@@ -9,6 +11,7 @@ from core.llm.ollama import OllamaLLM
 from core.llm.vllm import VLLMLLM
 from db.schemas import LLMProviderInfo
 
+logger = structlog.get_logger()
 settings = get_settings()
 
 
@@ -54,10 +57,11 @@ def create_llm_provider(
     config = LLMConfig(
         provider=provider,
         model_id=model_id,
-        temperature=cfg.get("temperature", 0.7),
-        max_tokens=cfg.get("max_tokens", 2048),
+        temperature=cfg.get("temperature", settings.llm_temperature),
+        max_tokens=cfg.get("max_tokens", settings.llm_max_tokens),
         top_p=cfg.get("top_p", 0.9),
-        timeout=cfg.get("timeout", 120),
+        timeout=cfg.get("timeout", settings.llm_timeout),
+        reasoning_effort=cfg.get("reasoning_effort", settings.llm_reasoning_effort),
     )
 
     if provider == "doubao":
@@ -79,10 +83,34 @@ def create_llm_provider(
 
 
 def get_caption_provider() -> Optional[LLMProvider]:
-    """返回用于图片 captioning 的 LLM，优先 Doubao，降级到 Ollama"""
+    """
+    返回用于图片 captioning 的多模态 LLM。
+
+    优先级：显式配置（CAPTION_PROVIDER）→ 豆包 Vision → DeepSeek（V4.1-Flash 起支持图像输入）
+    → Ollama 本地视觉模型。返回的 provider 是否真的能看图由 ImageCaptioner 的 probe() 判定。
+    """
+    # 1. 显式配置优先
+    if settings.caption_provider and settings.caption_model_id:
+        try:
+            return create_llm_provider(settings.caption_provider, settings.caption_model_id)
+        except Exception as e:
+            logger.warning(
+                "caption_provider_config_invalid",
+                provider=settings.caption_provider,
+                model_id=settings.caption_model_id,
+                error=str(e),
+            )
+
+    # 2. 豆包 Vision
     if settings.ark_api_key:
         return create_llm_provider("doubao", settings.doubao_vision_chat_model)
+
+    # 3. DeepSeek（deepseek-flash 等多模态模型）
+    if settings.deepseek_api_key:
+        return create_llm_provider("deepseek", settings.deepseek_model)
+
+    # 4. Ollama 本地视觉模型
     try:
-        return create_llm_provider("ollama", "llava")
+        return create_llm_provider("ollama", settings.ollama_vision_model)
     except Exception:
         return None

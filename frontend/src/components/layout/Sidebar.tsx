@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Trash2, Upload, X, ChevronDown, ChevronRight,
@@ -7,10 +7,17 @@ import {
 import { knowledgeBaseApi } from '../../api/knowledgeBase'
 import { documentsApi } from '../../api/documents'
 import { sessionsApi } from '../../api/sessions'
+import { systemApi } from '../../api/system'
 import { useKBStore } from '../../stores/kbStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { ChatWindow } from '../chat/ChatWindow'
-import type { EmbeddingModelInfo, LLMProviderInfo } from '../../types/api'
+import type {
+  Document,
+  EmbeddingModelInfo,
+  HealthResponse,
+  IngestProgress,
+  LLMProviderInfo,
+} from '../../types/api'
 import clsx from 'clsx'
 
 function CreateKBModal({ onClose }: { onClose: () => void }) {
@@ -29,6 +36,18 @@ function CreateKBModal({ onClose }: { onClose: () => void }) {
       return r.json()
     },
   })
+
+  // 默认选中第一个「当前真正可用」的模型（例如去掉 Ark Key 后不再默认豆包）
+  useEffect(() => {
+    if (!models?.length) return
+    const exists = models.some((m) => m.provider === provider && m.model_id === modelId)
+    if (!exists) {
+      setProvider(models[0].provider)
+      setModelId(models[0].model_id)
+      setDim(models[0].vector_dim)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [models])
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -185,12 +204,12 @@ function DocumentUploader({ kbId }: { kbId: string }) {
         {uploading ? (
           <span className="text-brand-light animate-pulse">上传中...</span>
         ) : (
-          <>点击或拖拽文件<br /><span className="text-gray-700">PDF · EPUB · Markdown</span></>
+          <>点击或拖拽文件<br /><span className="text-gray-700">PDF · EPUB · Markdown · TXT</span></>
         )}
       </span>
       <input
         type="file"
-        accept=".pdf,.epub,.md,.markdown"
+        accept=".pdf,.epub,.md,.markdown,.txt,.text,text/plain"
         multiple
         className="hidden"
         onChange={(e) => e.target.files && handleFiles(e.target.files)}
@@ -198,6 +217,70 @@ function DocumentUploader({ kbId }: { kbId: string }) {
       />
     </label>
   )
+}
+
+/**
+ * 轮询处理中文档的摄入进度。
+ * 只对 pending/processing 的文档发请求，全部处理完就自动停下。
+ */
+function useIngestProgress(
+  kbId: string | null,
+  docs: Document[] | undefined,
+  onFinished: () => void,
+): Record<string, IngestProgress> {
+  const [progressMap, setProgressMap] = useState<Record<string, IngestProgress>>({})
+  const finishedRef = useRef(false)
+
+  const pendingIds = (docs ?? [])
+    .filter((d) => d.status === 'pending' || d.status === 'processing')
+    .map((d) => d.id)
+  const pendingKey = pendingIds.join(',')
+
+  useEffect(() => {
+    if (!kbId || !pendingKey) {
+      setProgressMap({})
+      return
+    }
+    const ids = pendingKey.split(',')
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    finishedRef.current = false
+
+    const tick = async () => {
+      const next: Record<string, IngestProgress> = {}
+      let allDone = true
+      await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const status = await documentsApi.status(kbId, id)
+            if (status.progress) next[id] = status.progress
+            if (status.status !== 'indexed' && status.status !== 'failed') allDone = false
+          } catch {
+            allDone = false
+          }
+        }),
+      )
+      if (cancelled) return
+      setProgressMap(next)
+      if (allDone) {
+        if (!finishedRef.current) {
+          finishedRef.current = true
+          onFinished()
+        }
+        return
+      }
+      timer = setTimeout(tick, 1500)
+    }
+
+    tick()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kbId, pendingKey])
+
+  return progressMap
 }
 
 export function Sidebar() {
@@ -231,9 +314,32 @@ export function Sidebar() {
     enabled: !!expandedKB,
   })
 
+  // 摄入进度：对处理中的文档轮询 status，拿到 percent / 当前分片数
+  const progressMap = useIngestProgress(expandedKB, docs, () => {
+    queryClient.invalidateQueries({ queryKey: ['documents', expandedKB] })
+  })
+
+  // 外部模型服务连通性（30s 刷新一次，不阻塞界面）
+  const { data: health } = useQuery<HealthResponse>({
+    queryKey: ['health'],
+    queryFn: systemApi.health,
+    refetchInterval: 30_000,
+    retry: false,
+  })
+
   const loadSessions = async (kbId: string) => {
     const data = await sessionsApi.list(kbId)
     setSessions(data)
+  }
+
+  // 移除摄入失败的文档（含服务重启后残留的僵尸任务）
+  const handleDeleteDoc = async (kbId: string, docId: string) => {
+    try {
+      await documentsApi.delete(kbId, docId)
+    } catch (e) {
+      console.error(e)
+    }
+    queryClient.invalidateQueries({ queryKey: ['documents', kbId] })
   }
 
   const handleSelectKB = async (kbId: string) => {
@@ -372,25 +478,67 @@ export function Sidebar() {
             {expandedKB === kb.id && (
               <div className="mx-1 mb-2 mt-1 space-y-1.5 animate-fade-in">
                 <DocumentUploader kbId={kb.id} />
-                {docs?.map((doc) => (
+                {docs?.map((doc) => {
+                  const progress = progressMap[doc.id]
+                  const percent = Math.max(0, Math.min(100, progress?.percent ?? 0))
+                  const detail = progress
+                    ? progress.current != null && progress.total
+                      ? `${progress.stage_label} ${progress.current}/${progress.total}`
+                      : progress.stage_label
+                    : '等待处理…'
+                  return (
                   <div
                     key={doc.id}
-                    className="flex items-center gap-2 px-2.5 py-1.5 bg-surface-2/60 rounded-lg text-xs border border-white/[0.04]"
+                    className="px-2.5 py-1.5 bg-surface-2/60 rounded-lg text-xs border border-white/[0.04]"
                   >
-                    <span
-                      className={clsx(
-                        'w-1.5 h-1.5 rounded-full shrink-0',
-                        doc.status === 'indexed' ? 'bg-emerald-500' :
-                        doc.status === 'processing' ? 'bg-amber-500 animate-pulse-slow' :
-                        doc.status === 'failed' ? 'bg-red-500' : 'bg-gray-600',
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={clsx(
+                          'w-1.5 h-1.5 rounded-full shrink-0',
+                          doc.status === 'indexed' ? 'bg-emerald-500' :
+                          doc.status === 'processing' ? 'bg-amber-500 animate-pulse-slow' :
+                          doc.status === 'failed' ? 'bg-red-500' : 'bg-gray-600',
+                        )}
+                      />
+                      <span
+                        className="truncate text-gray-500 flex-1"
+                        title={doc.status === 'failed' ? doc.error_message || '摄入失败' : doc.filename}
+                      >
+                        {doc.filename}
+                      </span>
+                      {doc.status === 'indexed' && (
+                        <span className="text-gray-700 shrink-0 text-[10px]">{doc.chunk_count}</span>
                       )}
-                    />
-                    <span className="truncate text-gray-500 flex-1">{doc.filename}</span>
-                    {doc.status === 'indexed' && (
-                      <span className="text-gray-700 shrink-0 text-[10px]">{doc.chunk_count}</span>
+                      {doc.status === 'failed' && (
+                        <button
+                          onClick={() => handleDeleteDoc(kb.id, doc.id)}
+                          title={doc.error_message || '摄入失败，点击移除'}
+                          className="shrink-0 text-gray-600 hover:text-red-400 transition-colors"
+                        >
+                          <X size={11} />
+                        </button>
+                      )}
+                    </div>
+
+                    {(doc.status === 'pending' || doc.status === 'processing') && (
+                      <div className="mt-1.5">
+                        <div className="flex items-center justify-between gap-2 text-[10px]">
+                          <span className="truncate text-gray-600">{detail}</span>
+                          <span className="shrink-0 text-brand-light/80 font-mono">
+                            {Math.round(percent)}%
+                          </span>
+                        </div>
+                        <div className="mt-1 h-1 rounded-full bg-white/[0.06] overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-brand to-blue-500 transition-[width] duration-500 ease-out"
+                            style={{ width: `${percent}%` }}
+                          />
+                        </div>
+                      </div>
                     )}
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
 
@@ -449,6 +597,33 @@ export function Sidebar() {
         className="px-4 py-3 shrink-0"
         style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}
       >
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mb-1.5">
+          {([
+            ['Ollama', health?.providers?.ollama],
+            ['DeepSeek', health?.providers?.deepseek],
+            ['豆包', health?.providers?.ark],
+          ] as const).map(([label, provider]) => (
+            <span
+              key={label}
+              className="flex items-center gap-1 text-[10px] text-gray-600"
+              title={
+                provider
+                  ? provider.ok
+                    ? `${label} 已连通${provider.latency_ms != null ? ` · ${provider.latency_ms}ms` : ''}`
+                    : `${label} 不可用：${provider.error || (provider.configured === false ? '未配置' : '状态未知')}`
+                  : `${label} 状态未知`
+              }
+            >
+              <span
+                className={clsx(
+                  'w-1.5 h-1.5 rounded-full',
+                  !provider ? 'bg-gray-700' : provider.ok ? 'bg-emerald-500/80' : 'bg-red-500/80',
+                )}
+              />
+              {label}
+            </span>
+          ))}
+        </div>
         <div className="flex items-center gap-2">
           <Sparkles size={11} className="text-brand/60" />
           <span className="text-[10px] text-gray-700">Hybrid Search · BM25 + Dense · RRF</span>
@@ -483,7 +658,7 @@ export function MainContent() {
           </div>
           <h2 className="text-lg font-semibold gradient-text mb-2">电子书知识库</h2>
           <p className="text-sm text-gray-600 max-w-xs leading-relaxed">
-            从左侧选择知识库，或创建新的知识库并上传 PDF、EPUB、Markdown 文档
+            从左侧选择知识库，或创建新的知识库并上传 PDF、EPUB、Markdown、TXT 文档
           </p>
         </div>
       </div>

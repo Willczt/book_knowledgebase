@@ -1,6 +1,6 @@
 # 数据预处理指南
 
-本文档详细介绍如何将电子书（PDF、EPUB、Markdown）摄入知识库。
+本文档详细介绍如何将电子书（PDF、EPUB、Markdown、TXT）摄入知识库。
 
 ---
 
@@ -11,6 +11,7 @@
 | PDF（非扫描） | 文字可选取的 PDF | 提取内嵌图片，LLM Caption |
 | EPUB | HTML 结构的电子书 | 提取 OPF 资源图片 |
 | Markdown | 结构化文档 | 解析 `![alt](path)` 引用 |
+| TXT | 网络小说纯文本（UTF-8 / GBK / GB18030 / Big5） | 无 |
 
 ---
 
@@ -25,12 +26,17 @@
 
 **EPUB** (`backend/core/parsers/epub_parser.py`)
 - 使用 ebooklib 读取 OPF 包
-- BeautifulSoup4 解析 HTML 章节，提取纯文字
-- 提取封面图和内嵌图片
+- BeautifulSoup4 解析 HTML 章节，提取纯文字（只取叶子块级节点，避免容器 div 与子 p 重复输出）
+- 提取封面图和内嵌图片；同一张图只解码一次（按 src 缓存），尺寸达标时沿用原始编码不重编码
 
 **Markdown** (`backend/core/parsers/markdown_parser.py`)
 - 按 `##`/`###` 标题分段
 - 正则提取 `![alt](path)` 图片引用
+
+**TXT** (`backend/core/parsers/txt_parser.py`)
+- 自动识别编码（UTF-8 / UTF-16 BOM / GB18030 / Big5），网络小说常见的 GBK 文件可直接上传
+- 按「第N章 / 卷N / 序 / 楔子 / 番外 / 终章」等标题行切分章节，标题写入 chunk 的 `chapter` 元数据
+- 清理全角空格缩进与多余空行；无章节标记的超大文件按 2 万字切片
 
 ### 2. 图片 Caption
 

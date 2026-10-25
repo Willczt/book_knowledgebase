@@ -82,5 +82,6 @@ class DoubaoLLM(LLMProvider):
             messages=messages,
             max_tokens=512,
             stream=False,
+            timeout=settings.caption_timeout,
         )
         return response.choices[0].message.content or ""

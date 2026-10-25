@@ -30,11 +30,22 @@ async def run_ingest_task(
     """
     from db.engine import AsyncSessionLocal
     from db import crud
+    from tasks import liveness
+    from tasks import progress as ingest_progress
+
+    # 心跳：启动清理用它判断任务是否还活着（多 worker 下不会误杀）
+    stop_beat = asyncio.Event()
+    beat_task = asyncio.create_task(_heartbeat_loop(doc_id, stop_beat))
+    ingest_progress.start(doc_id)
 
     async with AsyncSessionLocal() as db:
         doc = await crud.get_document(db, doc_id)
         if doc is None:
             logger.error("ingest_task_doc_not_found", doc_id=doc_id)
+            stop_beat.set()
+            beat_task.cancel()
+            await asyncio.gather(beat_task, return_exceptions=True)
+            liveness.clear(doc_id)
             return
 
         # 更新状态
@@ -60,6 +71,21 @@ async def run_ingest_task(
 
         vector_store = QdrantVectorStore()
 
+        # caption 模型：知识库指定的优先，失败则回退到全局优先级
+        caption_llm = None
+        if caption_provider and caption_model_id:
+            try:
+                from core.llm.registry import create_llm_provider
+
+                caption_llm = create_llm_provider(caption_provider, caption_model_id)
+            except Exception as e:
+                logger.warning(
+                    "kb_caption_provider_invalid",
+                    provider=caption_provider,
+                    model_id=caption_model_id,
+                    error=str(e),
+                )
+
         # 创建一个临时 KB 对象供 Indexer 使用
         class _KB:
             id = kb_id
@@ -70,12 +96,14 @@ async def run_ingest_task(
             embedding_provider=embedding_provider,
             kb=_KB(),
             storage_root=settings.storage_root,
+            caption_provider=caption_llm,
         )
 
         chunk_count, image_count = await indexer.index_document(
             file_path=file_path,
             doc_id=doc_id,
             source_doc=source_doc,
+            progress=lambda payload: ingest_progress.update(doc_id, payload),
         )
 
         # 更新状态为成功
@@ -102,3 +130,22 @@ async def run_ingest_task(
                     "error_message": str(e)[:2000],
                     "processing_completed_at": datetime.now(timezone.utc),
                 })
+    finally:
+        stop_beat.set()
+        beat_task.cancel()
+        await asyncio.gather(beat_task, return_exceptions=True)
+        liveness.clear(doc_id)
+        ingest_progress.finish(doc_id)
+
+
+async def _heartbeat_loop(doc_id: str, stop: asyncio.Event) -> None:
+    """任务运行期间定期刷新心跳文件"""
+    from tasks import liveness
+
+    liveness.beat(doc_id)
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=settings.task_heartbeat_interval)
+            return
+        except asyncio.TimeoutError:
+            liveness.beat(doc_id)

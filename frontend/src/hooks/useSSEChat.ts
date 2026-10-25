@@ -5,6 +5,8 @@ interface UseSSEChatOptions {
   onToken: (token: string) => void
   onDone: (messageId: string, sources: SourceChunk[]) => void
   onError: (error: string) => void
+  /** 流在没有收到 done/error 的情况下结束（连接中断、服务重启等） */
+  onIncomplete?: (reason: string) => void
 }
 
 export function useSSEChat() {
@@ -47,6 +49,8 @@ export function useSSEChat() {
 
         const decoder = new TextDecoder()
         let buffer = ''
+        let doneReceived = false
+        let errorReceived = false
 
         while (true) {
           const { done, value } = await reader.read()
@@ -63,8 +67,10 @@ export function useSSEChat() {
                 if (data.token !== undefined) {
                   options.onToken(data.token)
                 } else if (data.done) {
+                  doneReceived = true
                   options.onDone(data.message_id, data.sources || [])
                 } else if (data.error) {
+                  errorReceived = true
                   options.onError(data.error)
                 }
               } catch {
@@ -72,6 +78,11 @@ export function useSSEChat() {
               }
             }
           }
+        }
+
+        // 服务端异常/重启时流会直接结束，不会发 done，界面需要恢复可交互
+        if (!doneReceived && !errorReceived) {
+          options.onIncomplete?.('连接中断，回答可能不完整')
         }
       } catch (error: unknown) {
         if ((error as Error).name !== 'AbortError') {

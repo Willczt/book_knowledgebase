@@ -1,12 +1,18 @@
 .PHONY: dev dev-qdrant install install-frontend lint format migrate
 
+# 优先使用项目内 venv，否则回退系统 python3
+PY := $(wildcard $(CURDIR)/.venv/bin/python)
+ifeq ($(PY),)
+PY := python3
+endif
+
 # 启动开发环境（仅 Qdrant，后端和前端分别手动启动）
 dev-qdrant:
 	docker compose -f docker-compose.yml -f docker-compose.dev.yml up qdrant -d
 
 # 启动后端开发服务器（使用项目 venv）
 dev-backend:
-	cd backend && /Users/bytedance/.venv/bin/python -m uvicorn main:app --reload --port 8000 --host 0.0.0.0
+	cd backend && $(PY) -m uvicorn main:app --reload --port 8000 --host 0.0.0.0
 
 # 启动前端开发服务器（自动安装依赖）
 dev-frontend:

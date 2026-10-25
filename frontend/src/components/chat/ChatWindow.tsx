@@ -12,9 +12,10 @@ interface ChatWindowProps {
 }
 
 export function ChatWindow({ sessionId }: ChatWindowProps) {
-  const { messages, setMessages, appendMessage, updateLastAssistantMessage } = useSessionStore()
+  const { messages, setMessages, appendMessage, updateMessage } = useSessionStore()
   const [isStreaming, setIsStreaming] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const sendingRef = useRef(false)
   const { sendMessage, abort } = useSSEChat()
 
   useEffect(() => {
@@ -32,10 +33,13 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
   }, [messages])
 
   const handleSend = async (content: string, image?: string) => {
-    if (isStreaming) return
+    // 用 ref 而不是 state 做互斥：state 更新是异步的，快速连点两次会发出两个并发请求
+    if (sendingRef.current) return
+    sendingRef.current = true
 
+    const stamp = Date.now()
     const userMsg: Message = {
-      id: `tmp-user-${Date.now()}`,
+      id: `tmp-user-${stamp}`,
       session_id: sessionId,
       role: 'user',
       content,
@@ -44,8 +48,9 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
     }
     appendMessage(userMsg)
 
+    const assistantId = `tmp-assistant-${stamp}`
     const assistantMsg: Message = {
-      id: `tmp-assistant-${Date.now()}`,
+      id: assistantId,
       session_id: sessionId,
       role: 'assistant',
       content: '',
@@ -56,26 +61,38 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
 
     let accContent = ''
 
+    const finalize = () => {
+      sendingRef.current = false
+      setIsStreaming(false)
+    }
+
     await sendMessage(sessionId, content, image, {
       onToken: (token) => {
         accContent += token
-        updateLastAssistantMessage(accContent)
+        updateMessage(assistantId, { content: accContent })
       },
       onDone: (_messageId, sources) => {
-        useSessionStore.getState().setMessages(
-          useSessionStore.getState().messages.map((m) =>
-            m.id === assistantMsg.id
-              ? { ...m, content: accContent, sources }
-              : m,
-          ),
-        )
-        setIsStreaming(false)
+        updateMessage(assistantId, {
+          content: accContent || '（模型没有返回内容，请重试）',
+          sources,
+        })
+        finalize()
       },
       onError: (error) => {
-        updateLastAssistantMessage(`[错误] ${error}`)
-        setIsStreaming(false)
+        updateMessage(assistantId, {
+          content: accContent ? `${accContent}\n\n> [出错] ${error}` : `[出错] ${error}`,
+        })
+        finalize()
+      },
+      onIncomplete: (reason) => {
+        updateMessage(assistantId, {
+          content: accContent ? `${accContent}\n\n> [中断] ${reason}` : `[中断] ${reason}`,
+        })
+        finalize()
       },
     })
+
+    finalize()
   }
 
   return (

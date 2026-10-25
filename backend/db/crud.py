@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Document, KnowledgeBase, Message, Session
@@ -75,6 +75,31 @@ async def update_document(db: AsyncSession, doc: Document, data: dict) -> Docume
 async def delete_document(db: AsyncSession, doc: Document) -> None:
     await db.delete(doc)
     await db.commit()
+
+
+async def list_unfinished_documents(db: AsyncSession) -> list[Document]:
+    """列出所有还没摄入完成的文档（pending / processing）"""
+    result = await db.execute(
+        select(Document).where(Document.status.in_(("pending", "processing")))
+    )
+    return list(result.scalars().all())
+
+
+async def fail_documents(db: AsyncSession, doc_ids: list[str], message: str) -> int:
+    """把指定文档标记为 failed（用于清理僵尸摄入任务）"""
+    if not doc_ids:
+        return 0
+    await db.execute(
+        update(Document)
+        .where(Document.id.in_(doc_ids))
+        .values(
+            status="failed",
+            error_message=message,
+            processing_completed_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+    return len(doc_ids)
 
 
 async def get_kb_stats(db: AsyncSession, kb_id: str) -> dict:
@@ -163,10 +188,13 @@ async def get_messages(
 
 async def get_recent_messages(db: AsyncSession, session_id: str, turns: int = 10) -> list[Message]:
     """获取最近 N 条消息（按时间升序排列，用于构建对话历史）"""
+    # created_at 由数据库生成，精度只到秒；同一轮 user/assistant 常落在同一秒。
+    # 用 role 做兜底排序，保证同一时刻 user 一定排在 assistant 之前，否则历史顺序会错乱。
+    role_order = case((Message.role == "user", 0), else_=1)
     result = await db.execute(
         select(Message)
         .where(Message.session_id == session_id)
-        .order_by(Message.created_at.desc())
+        .order_by(Message.created_at.desc(), role_order.desc())
         .limit(turns * 2)  # 每轮 user+assistant 各一条
     )
     messages = list(result.scalars().all())

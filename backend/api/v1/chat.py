@@ -115,6 +115,7 @@ async def stream_chat(
 
     async def event_generator() -> AsyncIterator[str]:
         nonlocal full_response, sources_data
+        error_message: str | None = None
         try:
             async for event in pipeline.stream_chat(
                 query_text=body.content,
@@ -129,12 +130,18 @@ async def stream_chat(
                     yield f"data: {json.dumps({'token': event['token']}, ensure_ascii=False)}\n\n"
                 elif event.get("done"):
                     sources_data = event.get("sources", [])
-                    yield f"data: {json.dumps({'done': True, 'message_id': message_id, 'sources': sources_data}, ensure_ascii=False)}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            error_message = str(e) or type(e).__name__
+            yield f"data: {json.dumps({'error': error_message}, ensure_ascii=False)}\n\n"
         finally:
             # 持久化消息
             full_text = "".join(full_response)
+            if not full_text.strip():
+                # 没有正文：告知前端明确原因，避免出现"空气泡"
+                if error_message is None:
+                    yield f"data: {json.dumps({'error': '模型没有返回任何内容，请重试'}, ensure_ascii=False)}\n\n"
+            else:
+                yield f"data: {json.dumps({'done': True, 'message_id': message_id, 'sources': sources_data}, ensure_ascii=False)}\n\n"
             # 将查询图片落盘，供后续消息历史展示
             saved_image_paths: list[str] = []
             if query_image:
@@ -181,13 +188,16 @@ async def _save_messages(
             "content": user_content,
             "image_paths": image_paths or None,
         })
-        await crud.create_message(db, {
-            "id": message_id,
-            "session_id": session_id,
-            "role": "assistant",
-            "content": assistant_content,
-            "sources": sources or None,
-        })
+        # 空回答不入库：否则下一轮历史里会多出一个空 assistant 消息，
+        # 模型会把它当成待补全的回答，转而去回答上一轮的提问
+        if assistant_content.strip():
+            await crud.create_message(db, {
+                "id": message_id,
+                "session_id": session_id,
+                "role": "assistant",
+                "content": assistant_content,
+                "sources": sources or None,
+            })
         # 更新 session updated_at
         session = await crud.get_session_by_id(db, session_id)
         if session:

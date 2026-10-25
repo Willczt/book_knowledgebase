@@ -67,12 +67,23 @@ class DocumentResponse(BaseModel):
     created_at: datetime
 
 
+class IngestProgress(BaseModel):
+    """摄入进度（进程内实时状态，仅 pending/processing 时有值）"""
+    stage: str
+    stage_label: str
+    percent: float
+    current: Optional[int] = None
+    total: Optional[int] = None
+    message: Optional[str] = None
+
+
 class DocumentStatusResponse(BaseModel):
     id: str
     status: str
     chunk_count: int
     image_count: int
     error_message: Optional[str]
+    progress: Optional[IngestProgress] = None
 
 
 # ========================

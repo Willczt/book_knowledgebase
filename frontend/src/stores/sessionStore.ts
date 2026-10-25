@@ -11,7 +11,7 @@ interface SessionStore {
   removeSession: (id: string) => void
   setMessages: (messages: Message[]) => void
   appendMessage: (message: Message) => void
-  updateLastAssistantMessage: (content: string) => void
+  updateMessage: (id: string, patch: Partial<Message>) => void
 }
 
 export const useSessionStore = create<SessionStore>((set) => ({
@@ -30,13 +30,9 @@ export const useSessionStore = create<SessionStore>((set) => ({
   setMessages: (messages) => set({ messages }),
   appendMessage: (message) =>
     set((state) => ({ messages: [...state.messages, message] })),
-  updateLastAssistantMessage: (content) =>
-    set((state) => {
-      const msgs = [...state.messages]
-      const last = msgs[msgs.length - 1]
-      if (last && last.role === 'assistant') {
-        msgs[msgs.length - 1] = { ...last, content }
-      }
-      return { messages: msgs }
-    }),
+  // 按 id 更新，避免并发/重复提交时把 token 写进别的消息气泡
+  updateMessage: (id, patch) =>
+    set((state) => ({
+      messages: state.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+    })),
 }))

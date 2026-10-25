@@ -3,10 +3,11 @@ import logging
 from typing import Optional
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from config import get_settings
 from core.embedding.base import EmbeddingModelInfo, EmbeddingProvider
+from core.error_mapping import friendly_embedding_error, is_retryable
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -47,6 +48,35 @@ class DoubaoEmbedding(EmbeddingProvider):
         texts: list[str],
         images: Optional[list[Optional[bytes]]] = None,
     ) -> list[list[float]]:
+        try:
+            return await self._embed_documents(texts, images)
+        except Exception as exc:
+            raise friendly_embedding_error(
+                exc,
+                provider="doubao",
+                base_url=self._base_url,
+                model_id=self._model_id,
+                timeout=settings.embedding_timeout,
+            ) from exc
+
+    async def embed_query(self, text: str, image: Optional[bytes] = None) -> list[float]:
+        try:
+            result = await self._embed_batch([text], [image] if image else None)
+            return result[0]
+        except Exception as exc:
+            raise friendly_embedding_error(
+                exc,
+                provider="doubao",
+                base_url=self._base_url,
+                model_id=self._model_id,
+                timeout=settings.embedding_timeout,
+            ) from exc
+
+    async def _embed_documents(
+        self,
+        texts: list[str],
+        images: Optional[list[Optional[bytes]]] = None,
+    ) -> list[list[float]]:
         results = []
         batch_size = self.model_info.max_batch_size
         for i in range(0, len(texts), batch_size):
@@ -69,11 +99,12 @@ class DoubaoEmbedding(EmbeddingProvider):
             results.extend(batch_result)
         return results
 
-    async def embed_query(self, text: str, image: Optional[bytes] = None) -> list[float]:
-        result = await self._embed_batch([text], [image] if image else None)
-        return result[0]
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    @retry(
+        retry=retry_if_exception(is_retryable),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
     async def _embed_batch(
         self,
         texts: list[str],
@@ -104,7 +135,7 @@ class DoubaoEmbedding(EmbeddingProvider):
             payload = {"model": self._model_id, "input": texts}
             endpoint = f"{self._base_url}/embeddings"
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=settings.embedding_timeout) as client:
             response = await client.post(endpoint, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()

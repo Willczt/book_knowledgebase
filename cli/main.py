@@ -144,7 +144,7 @@ def kb_delete(
 
 @app.command("ingest")
 def ingest(
-    path: Path = typer.Argument(..., help="文件路径（pdf/epub/md）"),
+    path: Path = typer.Argument(..., help="文件路径（pdf/epub/md/txt）"),
     kb_id: str = typer.Option(..., "--kb-id", help="目标知识库 ID"),
     wait: bool = typer.Option(True, "--wait/--no-wait", help="是否等待摄入完成"),
 ):
