@@ -32,7 +32,7 @@ function SourcePanel({ sources }: { sources: SourceChunk[] }) {
           {sources.map((s) => (
             <div
               key={s.chunk_id}
-              className="bg-surface-2 rounded-xl p-3 border border-white/[0.06] hover:border-white/[0.10] transition-colors"
+              className="source-card bg-surface-2/90 rounded-xl p-3 border border-white/[0.06]"
             >
               <div className="flex items-center gap-1.5 mb-2">
                 <div className={clsx(
@@ -84,10 +84,7 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
               className="max-h-48 rounded-xl border border-white/[0.08] object-cover"
             />
           ))}
-          <div
-            className="px-4 py-2.5 rounded-2xl rounded-tr-sm text-white text-sm leading-relaxed"
-            style={{ background: 'linear-gradient(135deg, #7c3aed 0%, #3b82f6 100%)' }}
-          >
+          <div className="bubble-user px-4 py-2.5 rounded-2xl rounded-tr-sm text-sm leading-relaxed">
             <p className="whitespace-pre-wrap">{message.content}</p>
           </div>
         </div>
@@ -98,14 +95,11 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
   return (
     <div className="flex gap-3 mb-6 animate-slide-up">
       {/* AI Avatar */}
-      <div
-        className="w-7 h-7 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
-        style={{ background: 'linear-gradient(135deg, #7c3aed 0%, #3b82f6 100%)' }}
-      >
-        <Cpu size={13} className="text-white" />
+      <div className="assistant-avatar w-7 h-7 rounded-xl flex items-center justify-center shrink-0 mt-0.5">
+        <Cpu size={13} className="text-brand-light" />
       </div>
 
-      <div className="flex-1 min-w-0">
+      <div className="assistant-card flex-1 min-w-0">
         {/* AI message images */}
         {message.image_paths?.map((path, i) => (
           <img

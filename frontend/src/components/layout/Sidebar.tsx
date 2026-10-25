@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Trash2, Upload, Download, Pencil, X, ChevronDown, ChevronRight,
@@ -131,11 +132,8 @@ function CreateKBModal({ onClose }: { onClose: () => void }) {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
-            <div
-              className="w-7 h-7 rounded-lg flex items-center justify-center"
-              style={{ background: 'linear-gradient(135deg, #7c3aed, #3b82f6)' }}
-            >
-              <Database size={13} className="text-white" />
+            <div className="logo-mark w-7 h-7 rounded-lg flex items-center justify-center">
+              <Database size={13} className="text-brand-light" />
             </div>
             <h2 className="text-sm font-semibold text-gray-100">新建知识库</h2>
           </div>
@@ -517,24 +515,15 @@ export function Sidebar() {
   }
 
   return (
-    <aside
-      className="w-[268px] h-full flex flex-col shrink-0"
-      style={{
-        background: 'linear-gradient(180deg, #080a12 0%, #07090f 100%)',
-        borderRight: '1px solid rgba(255,255,255,0.05)',
-      }}
-    >
+    <aside className="sidebar-panel relative z-10 w-[268px] shrink-0 my-3 ml-3 h-[calc(100%-1.5rem)] flex flex-col">
       {/* Logo Header */}
       <div className="px-4 py-4 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
         <div className="flex items-center gap-2.5 mb-4">
-          <div
-            className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
-            style={{ background: 'linear-gradient(135deg, #7c3aed, #3b82f6)', boxShadow: '0 4px 14px rgba(124,58,237,0.4)' }}
-          >
-            <BookOpen size={15} className="text-white" />
+          <div className="logo-mark w-8 h-8 rounded-xl flex items-center justify-center shrink-0">
+            <BookOpen size={15} className="text-brand-light" />
           </div>
           <div>
-            <div className="text-[13px] font-bold gradient-text leading-tight">{APP_NAME}</div>
+            <div className="brand-glow text-[13px] font-bold gradient-text leading-tight">{APP_NAME}</div>
             <div className="text-[10px] text-gray-700 leading-tight">{APP_TAGLINE}</div>
           </div>
         </div>
@@ -582,9 +571,10 @@ export function Sidebar() {
             {/* KB Row */}
             <div
               className={clsx(
-                'flex items-center gap-1.5 px-2.5 py-2 rounded-xl group transition-all duration-150',
+                'nav-glow sheen flex items-center gap-1.5 px-2.5 py-2 rounded-xl group',
+                'transition-all duration-200',
                 activeKB?.id === kb.id
-                  ? 'bg-brand/10 border border-brand/20'
+                  ? 'is-active bg-brand/10 border border-brand/25'
                   : 'hover:bg-white/[0.04] border border-transparent',
               )}
             >
@@ -760,7 +750,7 @@ export function Sidebar() {
 
                 <button
                   onClick={handleNewSession}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs text-gray-500 hover:text-gray-200 hover:bg-white/[0.05] transition-all duration-150 group"
+                  className="sheen w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs text-gray-500 hover:text-gray-200 hover:bg-white/[0.06] transition-all duration-200 group"
                 >
                   <div className="w-4 h-4 rounded-md bg-white/[0.06] flex items-center justify-center group-hover:bg-brand/20 transition-colors">
                     <Plus size={9} className="group-hover:text-brand-light transition-colors" />
@@ -773,10 +763,10 @@ export function Sidebar() {
                     key={s.id}
                     onClick={() => setActiveSession(s)}
                     className={clsx(
-                      'flex items-center gap-2 px-2.5 py-1.5 rounded-xl cursor-pointer group text-xs transition-all duration-150',
+                      'nav-glow sheen flex items-center gap-2 px-2.5 py-1.5 rounded-xl cursor-pointer group text-xs transition-all duration-200',
                       activeSession?.id === s.id
-                        ? 'bg-brand/15 text-brand-light border border-brand/20'
-                        : 'text-gray-500 hover:bg-white/[0.04] hover:text-gray-300 border border-transparent',
+                        ? 'is-active bg-brand/15 text-brand-light border border-brand/25'
+                        : 'text-gray-400 hover:bg-white/[0.05] hover:text-gray-200 border border-transparent',
                     )}
                   >
                     <MessageSquare size={10} className="shrink-0 opacity-60" />
@@ -873,11 +863,16 @@ export function Sidebar() {
         </div>
         <div className="flex items-center gap-2">
           <Sparkles size={11} className="text-brand/60" />
-          <span className="text-[10px] text-gray-700">Hybrid Search · BM25 + Dense · RRF</span>
+          <span className="text-[10px] text-gray-600">Hybrid Search · BM25 + Dense · RRF</span>
         </div>
       </div>
 
-      {showCreateModal && <CreateKBModal onClose={() => setShowCreateModal(false)} />}
+      {/* 侧栏有 backdrop-filter，会成为 fixed 定位的参照系，弹窗必须挂到 body */}
+      {showCreateModal &&
+        createPortal(
+          <CreateKBModal onClose={() => setShowCreateModal(false)} />,
+          document.body,
+        )}
     </aside>
   )
 }
@@ -888,19 +883,24 @@ export function MainContent() {
 
   if (!activeKB) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-surface-0">
+      <div className="relative z-10 flex-1 flex items-center justify-center">
         <div className="text-center animate-fade-in">
           {/* Gradient orbs */}
-          <div className="relative mb-6 flex justify-center">
-            <div className="absolute w-32 h-32 rounded-full blur-3xl opacity-20"
+          <div className="relative mb-8 flex justify-center">
+            <div className="absolute w-36 h-36 rounded-full blur-3xl opacity-30 -translate-y-2"
               style={{ background: 'radial-gradient(circle, #7c3aed, transparent)' }} />
-            <div className="absolute w-32 h-32 rounded-full blur-3xl opacity-20 translate-x-8"
+            <div className="absolute w-36 h-36 rounded-full blur-3xl opacity-25 translate-x-10"
               style={{ background: 'radial-gradient(circle, #3b82f6, transparent)' }} />
             <div
               className="relative w-16 h-16 rounded-2xl flex items-center justify-center"
-              style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(59,130,246,0.2))', border: '1px solid rgba(124,58,237,0.3)' }}
+              style={{
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid rgba(167,139,250,0.35)',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12), 0 0 26px -12px rgba(124,58,237,0.95)',
+              }}
             >
-              <BookOpen size={28} className="text-brand-light" />
+              <span className="halo-ring" aria-hidden="true" />
+              <BookOpen size={28} className="relative text-brand-light" />
             </div>
           </div>
           <h2 className="text-lg font-semibold gradient-text mb-2">{APP_NAME}</h2>
@@ -915,11 +915,15 @@ export function MainContent() {
 
   if (!activeSession) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-surface-0">
+      <div className="relative z-10 flex-1 flex items-center justify-center">
         <div className="text-center animate-fade-in">
           <div
-            className="w-12 h-12 rounded-xl mx-auto mb-4 flex items-center justify-center"
-            style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(59,130,246,0.2))', border: '1px solid rgba(124,58,237,0.25)' }}
+            className="relative w-12 h-12 rounded-xl mx-auto mb-4 flex items-center justify-center"
+            style={{
+              background: 'rgba(255,255,255,0.03)',
+              border: '1px solid rgba(167,139,250,0.32)',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12), 0 0 24px -12px rgba(124,58,237,0.9)',
+            }}
           >
             <MessageSquare size={20} className="text-brand-light" />
           </div>
@@ -931,16 +935,9 @@ export function MainContent() {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-surface-0">
+    <div className="relative z-10 flex-1 flex flex-col overflow-hidden">
       {/* Header */}
-      <header
-        className="flex items-center px-6 py-3 shrink-0"
-        style={{
-          background: 'rgba(7,8,14,0.8)',
-          backdropFilter: 'blur(12px)',
-          borderBottom: '1px solid rgba(255,255,255,0.05)',
-        }}
-      >
+      <header className="glass-header flex items-center px-6 py-3 shrink-0">
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-gray-200 truncate">
             {activeSession.title || '新会话'}

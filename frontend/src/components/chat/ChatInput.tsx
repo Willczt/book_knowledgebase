@@ -56,14 +56,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
 
   return (
     <div className="px-4 pb-4 pt-2">
-      <div
-        className={clsx(
-          'relative rounded-2xl transition-all duration-300',
-          isFocused
-            ? 'gradient-border-focus shadow-brand-glow'
-            : 'bg-surface-2 border border-white/[0.08]',
-        )}
-      >
+      <div className={clsx('composer rounded-2xl', isFocused && 'is-focused')}>
         {/* Image Preview */}
         {imagePreview && (
           <div className="px-4 pt-3">
@@ -114,10 +107,9 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
               className={clsx(
                 'w-8 h-8 rounded-xl flex items-center justify-center transition-all duration-200',
                 canSend
-                  ? 'text-white shadow-brand-glow hover:shadow-brand-glow-lg hover:-translate-y-0.5 active:translate-y-0'
+                  ? 'btn-send active:translate-y-0'
                   : 'bg-surface-3 text-gray-600 cursor-not-allowed',
               )}
-              style={canSend ? { background: 'linear-gradient(135deg, #7c3aed, #3b82f6)' } : undefined}
             >
               <Send size={15} />
             </button>
@@ -125,7 +117,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         </div>
       </div>
 
-      <p className="text-center text-[11px] text-gray-700 mt-2">
+      <p className="text-center text-[11px] text-gray-600 mt-2">
         Enter 发送 · Shift+Enter 换行
       </p>
 

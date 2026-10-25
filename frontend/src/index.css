@@ -2,84 +2,527 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================
+   光影系统 tokens
+   ============================================================ */
+:root {
+  --glow-violet: 124, 58, 237;
+  --glow-blue: 59, 130, 246;
+  --glow-cyan: 34, 211, 238;
+  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline-strong: rgba(255, 255, 255, 0.12);
+}
+
 @layer base {
   * {
     box-sizing: border-box;
   }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
   body {
-    @apply bg-surface-0 text-gray-100 font-sans antialiased;
+    @apply text-gray-100 font-sans antialiased;
     margin: 0;
     padding: 0;
+    background-color: #05060c;
+    /* 顶部主光 + 两侧辅光 + 底部反光：固定不随滚动，制造“打在墙上的光” */
+    background-image:
+      radial-gradient(1200px 560px at 50% -18%, rgba(167, 139, 250, 0.13), transparent 70%),
+      radial-gradient(1100px 640px at 15% -12%, rgba(var(--glow-violet), 0.26), transparent 62%),
+      radial-gradient(940px 580px at 86% -6%, rgba(var(--glow-blue), 0.2), transparent 60%),
+      radial-gradient(800px 520px at 50% 112%, rgba(var(--glow-cyan), 0.07), transparent 60%);
+    background-attachment: fixed;
+  }
+  ::selection {
+    background: rgba(var(--glow-violet), 0.35);
+    color: #fff;
   }
   ::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+    width: 6px;
+    height: 6px;
   }
   ::-webkit-scrollbar-track {
-    @apply bg-transparent;
+    background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(255,255,255,0.1);
+    background: linear-gradient(180deg, rgba(var(--glow-violet), 0.35), rgba(var(--glow-blue), 0.3));
     border-radius: 99px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255,255,255,0.18);
+    background: linear-gradient(180deg, rgba(var(--glow-violet), 0.6), rgba(var(--glow-blue), 0.5));
   }
 }
 
 @layer components {
+  /* 透明描边按钮：背景光影可以直接透过来 */
   .btn-primary {
-    @apply text-white px-4 py-2 rounded-xl font-medium transition-all duration-200
-           disabled:opacity-40 disabled:cursor-not-allowed;
-    background: linear-gradient(135deg, #7c3aed 0%, #3b82f6 100%);
+    @apply px-4 py-2 rounded-xl font-medium transition-all duration-200
+           disabled:opacity-35 disabled:cursor-not-allowed;
+    position: relative;
+    overflow: hidden;
+    color: #ddd6fe;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(167, 139, 250, 0.45);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 0 20px -12px rgba(var(--glow-violet), 0.9);
   }
   .btn-primary:not(:disabled):hover {
-    background: linear-gradient(135deg, #6d28d9 0%, #2563eb 100%);
-    box-shadow: 0 0 20px rgba(124, 58, 237, 0.3);
+    color: #f5f3ff;
+    background: rgba(124, 58, 237, 0.14);
+    border-color: rgba(196, 181, 253, 0.8);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      0 0 26px -6px rgba(var(--glow-violet), 0.85);
     transform: translateY(-1px);
   }
   .btn-primary:not(:disabled):active {
     transform: translateY(0);
+    background: rgba(124, 58, 237, 0.2);
   }
 
   .btn-ghost {
-    @apply text-gray-400 px-3 py-2 rounded-xl hover:bg-white/[0.06] hover:text-white 
+    @apply text-gray-400 px-3 py-2 rounded-xl hover:bg-white/[0.06] hover:text-white
            transition-all duration-150;
+  }
+  .btn-ghost:hover {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
 
   .btn-icon {
     @apply p-1.5 rounded-lg text-gray-500 hover:text-gray-200 hover:bg-white/[0.06]
            transition-all duration-150;
   }
+  .btn-icon:hover {
+    box-shadow: 0 0 16px -6px rgba(var(--glow-violet), 0.9);
+  }
 
   .input-base {
     @apply bg-surface-2 border border-white/[0.08] rounded-xl px-3 py-2 text-sm text-gray-100
-           placeholder-gray-600 focus:outline-none focus:border-brand/50 
-           focus:shadow-[0_0_0_3px_rgba(124,58,237,0.1)] transition-all duration-200;
+           placeholder-gray-600 focus:outline-none transition-all duration-200;
+  }
+  .input-base:focus {
+    border-color: rgba(var(--glow-violet), 0.5);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 0 0 3px rgba(var(--glow-violet), 0.12),
+      0 0 24px -8px rgba(var(--glow-violet), 0.8);
   }
 
   .card {
     @apply bg-surface-1 border border-white/[0.07] rounded-2xl;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 18px 40px -30px #000;
   }
 
   .glass-card {
-    background: rgba(10, 12, 22, 0.8);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    background: linear-gradient(180deg, rgba(16, 18, 30, 0.86) 0%, rgba(9, 11, 18, 0.9) 100%);
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
     @apply border border-white/[0.08] rounded-2xl;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 20px 60px rgba(0,0,0,0.5);
-  }
-
-  /* Gradient border utility */
-  .gradient-border-focus {
-    background: linear-gradient(#0b0d16, #0b0d16) padding-box,
-                linear-gradient(135deg, #7c3aed, #3b82f6) border-box;
-    border: 1px solid transparent;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      0 30px 80px -30px rgba(0, 0, 0, 0.9),
+      0 0 60px -40px rgba(var(--glow-violet), 0.8);
   }
 }
 
-/* Markdown */
+/* ============================================================
+   环境光：缓慢漂移的光斑 + 顶部光带 + 颗粒
+   ============================================================ */
+.ambient-light {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.ambient-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(80px);
+  opacity: 0.5;
+  will-change: transform;
+}
+.ambient-orb--violet {
+  width: 620px;
+  height: 620px;
+  left: -180px;
+  top: -240px;
+  background: radial-gradient(circle, rgba(var(--glow-violet), 0.55), transparent 65%);
+  animation: drift-a 72s ease-in-out infinite;
+}
+.ambient-orb--blue {
+  width: 540px;
+  height: 540px;
+  right: -160px;
+  top: -180px;
+  background: radial-gradient(circle, rgba(var(--glow-blue), 0.5), transparent 65%);
+  animation: drift-b 88s ease-in-out infinite;
+}
+.ambient-orb--cyan {
+  width: 420px;
+  height: 420px;
+  left: 42%;
+  bottom: -260px;
+  background: radial-gradient(circle, rgba(var(--glow-cyan), 0.28), transparent 65%);
+  animation: drift-c 104s ease-in-out infinite;
+}
+/* 顶部主光：整块页面的“主灯”，缓慢呼吸 */
+.ambient-orb--key {
+  width: 980px;
+  height: 520px;
+  left: 50%;
+  top: -300px;
+  margin-left: -490px;
+  background: radial-gradient(ellipse at center, rgba(139, 92, 246, 0.4), transparent 70%);
+  filter: blur(100px);
+  opacity: 0.3;
+  animation: key-breathe 48s ease-in-out infinite;
+}
+@keyframes key-breathe {
+  0%, 100% { opacity: 0.24; transform: scale(1); }
+  50% { opacity: 0.42; transform: scale(1.08); }
+}
+
+/* 顶部一道细光带，像灯带打在边缘 */
+.top-light {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  z-index: 60;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(var(--glow-violet), 0.55) 22%,
+    rgba(167, 139, 250, 0.75) 50%,
+    rgba(var(--glow-blue), 0.5) 78%,
+    transparent 100%
+  );
+  opacity: 0.7;
+}
+
+/* 跟随鼠标的柔光（坐标由 App 写入 --mx / --my） */
+.cursor-glow {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  background: radial-gradient(
+    360px circle at var(--mx, 50%) var(--my, -30%),
+    rgba(139, 92, 246, 0.13),
+    rgba(59, 130, 246, 0.06) 45%,
+    transparent 68%
+  );
+}
+@media (hover: none) {
+  .cursor-glow {
+    display: none;
+  }
+}
+
+/* 细颗粒，消除大面积渐变的塑料感 */
+.app-grain {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  pointer-events: none;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@keyframes drift-a {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(90px, 70px, 0) scale(1.14); }
+}
+@keyframes drift-b {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1.05); }
+  50% { transform: translate3d(-80px, 90px, 0) scale(0.94); }
+}
+@keyframes drift-c {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.22; }
+  50% { transform: translate3d(60px, -50px, 0) scale(1.2); opacity: 0.4; }
+}
+
+/* ============================================================
+   面板 / 玻璃
+   ============================================================ */
+/* 悬浮面板：近乎透明，只留一条极细的圆角描边，光可以穿过去 */
+.sidebar-panel {
+  position: relative;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0.012) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 24px 60px -46px rgba(0, 0, 0, 0.9);
+  overflow: hidden;
+}
+/* 顶部一束很淡的侧光 */
+.sidebar-panel::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 190px;
+  background: radial-gradient(320px 150px at 18% 0%, rgba(var(--glow-violet), 0.16), transparent 72%);
+  pointer-events: none;
+}
+
+/* 会话头部：完全透明，只留一条发丝光带分隔，避免在顶部糊一条黑条 */
+.glass-header {
+  position: relative;
+  background: transparent;
+}
+.glass-header::after {
+  content: '';
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(var(--glow-violet), 0.6) 24%,
+    rgba(167, 139, 250, 0.55) 50%,
+    rgba(var(--glow-blue), 0.5) 76%,
+    transparent
+  );
+  opacity: 0.85;
+}
+
+/* 主内容区：顶部聚光 + 极淡的顶光渐变 */
+.chat-surface {
+  background:
+    radial-gradient(820px 440px at 50% -6%, rgba(var(--glow-violet), 0.16), transparent 74%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.014) 0%, transparent 18%);
+}
+
+/* 输入框悬浮：底部渐隐，让内容在输入框下面“淡出” */
+.composer-dock {
+  position: relative;
+}
+.composer-dock::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -64px;
+  height: 64px;
+  background: linear-gradient(to bottom, rgba(5, 6, 12, 0), rgba(5, 6, 12, 0.92));
+  pointer-events: none;
+}
+
+/* ============================================================
+   导航高亮：左侧发光竖条 + 外发光
+   ============================================================ */
+.nav-glow {
+  position: relative;
+}
+.nav-glow::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 58%;
+  border-radius: 99px;
+  transform: translateY(-50%) scaleY(0.4);
+  background: linear-gradient(180deg, #c4b5fd, #60a5fa);
+  box-shadow:
+    0 0 8px rgba(167, 139, 250, 0.9),
+    0 0 18px rgba(var(--glow-blue), 0.6);
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  pointer-events: none;
+}
+.nav-glow.is-active::before {
+  opacity: 1;
+  transform: translateY(-50%) scaleY(1);
+}
+.nav-glow.is-active {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 6px 22px -14px rgba(var(--glow-violet), 0.9);
+}
+
+/* ============================================================
+   光扫过（hover 时一道斜向高光掠过）
+   ============================================================ */
+.sheen {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.sheen::after {
+  content: '';
+  position: absolute;
+  inset: -60% -40%;
+  background: linear-gradient(
+    115deg,
+    transparent 38%,
+    rgba(255, 255, 255, 0.16) 50%,
+    transparent 62%
+  );
+  transform: translateX(-130%);
+  transition: transform 0.85s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+  z-index: 1;
+}
+.sheen:hover::after {
+  transform: translateX(130%);
+}
+
+/* ============================================================
+   品牌标识 / 光环
+   ============================================================ */
+.logo-mark {
+  position: relative;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -2px 6px rgba(0, 0, 0, 0.25),
+    0 6px 20px -6px rgba(var(--glow-violet), 0.85),
+    0 0 30px -12px rgba(var(--glow-blue), 0.9);
+}
+.brand-glow {
+  text-shadow: 0 0 18px rgba(167, 139, 250, 0.45);
+}
+
+/* 会缓慢旋转的锥形光晕，用于空状态图标 */
+.halo-ring {
+  position: absolute;
+  inset: -14px;
+  border-radius: 26px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(var(--glow-violet), 0) 0deg,
+    rgba(var(--glow-violet), 0.55) 90deg,
+    rgba(var(--glow-blue), 0.55) 220deg,
+    rgba(var(--glow-cyan), 0.35) 300deg,
+    rgba(var(--glow-violet), 0) 360deg
+  );
+  filter: blur(18px);
+  animation: spin-slow 46s linear infinite;
+  pointer-events: none;
+}
+@keyframes spin-slow {
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================
+   对话：气泡与输入框
+   ============================================================ */
+/* 用户消息：透明底 + 细描边 + 内侧光 */
+.bubble-user {
+  color: #ece9ff;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(167, 139, 250, 0.38);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 12px 30px -22px rgba(var(--glow-violet), 0.95);
+}
+
+/* 头像/图标：透明底 + 发光描边 */
+.assistant-avatar,
+.logo-mark {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(167, 139, 250, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 22px -10px rgba(var(--glow-violet), 0.95);
+}
+
+/* 助手回答：一层极淡的玻璃卡，制造前后层次 */
+.assistant-card {
+  position: relative;
+  padding: 14px 18px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.012) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 18px 44px -38px #000;
+}
+/* 左上角一点掠光 */
+.assistant-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(220px 90px at 6% 0%, rgba(var(--glow-violet), 0.12), transparent 70%);
+  pointer-events: none;
+}
+
+.source-card {
+  transition: border-color 0.2s ease, box-shadow 0.25s ease, transform 0.2s ease;
+}
+.source-card:hover {
+  border-color: rgba(var(--glow-violet), 0.3);
+  box-shadow: 0 14px 34px -22px rgba(var(--glow-violet), 0.95);
+  transform: translateY(-1px);
+}
+
+.composer {
+  position: relative;
+  border: 1px solid var(--hairline);
+  background: linear-gradient(180deg, rgba(18, 20, 33, 0.92) 0%, rgba(11, 13, 22, 0.94) 100%);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 20px 44px -28px #000;
+  transition: border-color 0.3s ease, box-shadow 0.35s ease, background 0.3s ease;
+}
+.composer.is-focused {
+  border-color: transparent;
+  background:
+    linear-gradient(180deg, rgba(24, 26, 42, 0.72) 0%, rgba(12, 14, 24, 0.75) 100%) padding-box,
+    conic-gradient(
+        from 140deg,
+        rgba(var(--glow-violet), 0.95),
+        rgba(var(--glow-cyan), 0.5),
+        rgba(var(--glow-blue), 0.95),
+        rgba(var(--glow-violet), 0.95)
+      )
+      border-box;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 0 0 1px rgba(var(--glow-violet), 0.22),
+    0 0 34px -6px rgba(var(--glow-violet), 0.5),
+    0 26px 60px -34px rgba(var(--glow-blue), 0.6);
+}
+
+.btn-send {
+  color: #ddd6fe;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 18px -10px rgba(var(--glow-violet), 0.9);
+  transition: transform 0.2s ease, box-shadow 0.25s ease, background 0.2s ease;
+}
+.btn-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+  color: #f5f3ff;
+  background: rgba(var(--glow-violet), 0.16);
+  border-color: rgba(196, 181, 253, 0.8);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 26px -6px rgba(var(--glow-violet), 0.9);
+}
+
+/* ============================================================
+   Markdown
+   ============================================================ */
 .markdown-body {
   @apply text-sm text-gray-200 leading-relaxed;
 }
@@ -91,9 +534,11 @@
 .markdown-body p { @apply mb-3; }
 .markdown-body code {
   @apply bg-surface-3 px-1.5 py-0.5 rounded-md text-xs text-brand-light font-mono;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .markdown-body pre {
   @apply bg-surface-2 border border-white/[0.06] p-3 rounded-xl overflow-x-auto my-3;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 28px -24px #000;
 }
 .markdown-body pre code {
   @apply bg-transparent p-0 text-gray-300;
@@ -126,13 +571,14 @@
 
 /* Gradient text */
 .gradient-text {
-  background: linear-gradient(135deg, #a78bfa 0%, #60a5fa 100%);
+  background: linear-gradient(135deg, #c4b5fd 0%, #a78bfa 40%, #60a5fa 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  filter: drop-shadow(0 0 12px rgba(167, 139, 250, 0.25));
 }
 
-/* Noise/subtle overlay */
+/* Noise/subtle overlay（组件内局部使用） */
 .noise-overlay::before {
   content: '';
   position: absolute;
@@ -140,4 +586,14 @@
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
   pointer-events: none;
   border-radius: inherit;
+}
+
+/* 无障碍：减少动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .ambient-orb,
+  .halo-ring,
+  .sheen::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
