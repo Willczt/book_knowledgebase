@@ -6,6 +6,7 @@ import structlog
 from config import get_settings
 from core.exceptions import LLMEmptyResponse
 from core.llm.base import ChatMessage, LLMProvider, MessageRole
+from core.rag.query_rewriter import rewrite_query
 from core.retrieval.retriever import HybridRetriever
 from db.models import KnowledgeBase
 from db.schemas import SourceChunk
@@ -88,6 +89,36 @@ class RAGPipeline:
         self._retriever = retriever
         self._llm = llm_provider
         self._kb = kb
+        self._rewrite_llm: Optional[LLMProvider] = None
+        self._rewrite_llm_ready = False
+
+    def _get_rewrite_llm(self) -> Optional[LLMProvider]:
+        """
+        改写用独立的 LLM 实例：温度 0、限制输出长度、推理强度 low，
+        避免推理模型把思考算满额度（那会导致空输出），同时压低延迟。
+        """
+        if self._rewrite_llm_ready:
+            return self._rewrite_llm
+
+        self._rewrite_llm_ready = True
+        cfg = self._llm.config
+        try:
+            from core.llm.registry import create_llm_provider
+
+            self._rewrite_llm = create_llm_provider(
+                cfg.provider,
+                cfg.model_id,
+                {
+                    "max_tokens": settings.query_rewrite_max_tokens,
+                    "temperature": 0.0,
+                    "reasoning_effort": "low",
+                    "timeout": min(cfg.timeout, 60),
+                },
+            )
+        except Exception as exc:
+            logger.warning("query_rewrite_llm_init_failed", error=str(exc)[:200])
+            self._rewrite_llm = None
+        return self._rewrite_llm
 
     async def retrieve(
         self,
@@ -122,20 +153,34 @@ class RAGPipeline:
         yield {"token": "..."} 若干次
         yield {"done": True, "sources": [...]} 一次（结束信号）
         """
-        # 1. 检索
+        history_messages = _build_history_messages(history)
+
+        # 1. 检索前先补全指代："二者矛盾体现在哪里？" → "曾国藩和李鸿章的矛盾体现在哪里？"
+        retrieval_query, rewrite_method = await rewrite_query(
+            self._get_rewrite_llm() if settings.query_rewrite == "llm" else None,
+            history_messages,
+            query_text,
+        )
+        if rewrite_method != "none":
+            logger.info(
+                "query_rewritten",
+                original=query_text[:60],
+                rewritten=retrieval_query[:80],
+                method=rewrite_method,
+            )
+
         results = await self.retrieve(
-            query_text=query_text,
+            query_text=retrieval_query,
             query_image=query_image,
             top_k=top_k,
             score_threshold=score_threshold,
             use_reranker=use_reranker,
         )
-        logger.info("rag_retrieve_done", query=query_text[:60], result_count=len(results),
+        logger.info("rag_retrieve_done", query=retrieval_query[:60], result_count=len(results),
                     collection=self._kb.qdrant_collection_name)
 
         # 2. 构建 prompt
         context = _format_context(results)
-        history_messages = _build_history_messages(history)
 
         system_with_context = _SYSTEM_PROMPT + f"\n\n参考资料：\n{context}"
 
@@ -179,4 +224,9 @@ class RAGPipeline:
             ).model_dump()
             for r in results
         ]
-        yield {"done": True, "sources": sources}
+        yield {
+            "done": True,
+            "sources": sources,
+            # 便于前端/调试查看实际用于检索的查询
+            "rewritten_query": retrieval_query if rewrite_method != "none" else None,
+        }

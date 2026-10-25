@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     # 摄入任务心跳写盘间隔（秒）
     task_heartbeat_interval: int = 15
 
+    # 多轮对话：检索前把依赖上文的追问改写成可独立检索的问题
+    # llm = 用 LLM 改写；concat = 仅拼接上一轮问题（不额外调用模型）；off = 关闭
+    query_rewrite: str = "llm"
+    query_rewrite_max_tokens: int = 2048
+
     # RAG 默认参数
     default_top_k: int = 8
     context_history_turns: int = 10

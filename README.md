@@ -11,7 +11,7 @@
 
 ## 功能特性
 
-- 📚 **多格式支持**：PDF（图文混排）、EPUB、Markdown、TXT（网络小说，自动编码识别 + 章节切分）
+- 💬 **多轮对话**：追问（"二者矛盾在哪"）会先用 LLM 补全成独立问题再检索，避免指代导致召回失败
 - 🖼️ **多模态**：图片自动通过 Vision LLM 生成描述并索引
 - 🔍 **混合检索**：Dense（向量）+ Sparse（BM25）双路召回，RRF 融合 + CrossEncoder 重排
 - 🔒 **Embedding 锁定**：防止向量空间错位的静默失败
@@ -227,6 +227,8 @@ book-rag chat --kb-id <id> --provider doubao --model doubao-seed-1-6-250715
 | `LLM_REASONING_EFFORT` | - | 推理强度 `low`/`high`/`max`，仅推理模型支持；`low` 更快、思考更短（实测同一问题 38s → 30s）|
 | `CHUNK_SIZE` | `512` | 文本分块大小（字符数），影响 chunk 数量与 embedding 耗时 |
 | `CHUNK_OVERLAP` | `64` | 分块重叠字符数 |
+| `QUERY_REWRITE` | `llm` | 多轮对话检索改写：`llm`（LLM 把"二者矛盾在哪"补全成独立问题）/ `concat`（仅拼接上一轮问题，不调用模型）/ `off` |
+| `QUERY_REWRITE_MAX_TOKENS` | `2048` | 改写调用上限（推理模型需留足思考预算）|
 | `DEFAULT_TOP_K` | `8` | 对话默认召回 chunk 数（请求里传 `top_k` 可覆盖）|
 | `CONTEXT_HISTORY_TURNS` | `10` | 对话携带的历史轮数 |
 | `MAX_IMAGE_DIMENSION` | `1024` | 图片入库前的最大边长，超过才缩放 |

@@ -112,9 +112,10 @@ async def stream_chat(
     message_id = str(uuid.uuid4())
     full_response = []
     sources_data = []
+    rewritten_query: str | None = None
 
     async def event_generator() -> AsyncIterator[str]:
-        nonlocal full_response, sources_data
+        nonlocal full_response, sources_data, rewritten_query
         error_message: str | None = None
         try:
             async for event in pipeline.stream_chat(
@@ -130,6 +131,7 @@ async def stream_chat(
                     yield f"data: {json.dumps({'token': event['token']}, ensure_ascii=False)}\n\n"
                 elif event.get("done"):
                     sources_data = event.get("sources", [])
+                    rewritten_query = event.get("rewritten_query")
         except Exception as e:
             error_message = str(e) or type(e).__name__
             yield f"data: {json.dumps({'error': error_message}, ensure_ascii=False)}\n\n"
@@ -141,7 +143,7 @@ async def stream_chat(
                 if error_message is None:
                     yield f"data: {json.dumps({'error': '模型没有返回任何内容，请重试'}, ensure_ascii=False)}\n\n"
             else:
-                yield f"data: {json.dumps({'done': True, 'message_id': message_id, 'sources': sources_data}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'done': True, 'message_id': message_id, 'sources': sources_data, 'rewritten_query': rewritten_query}, ensure_ascii=False)}\n\n"
             # 将查询图片落盘，供后续消息历史展示
             saved_image_paths: list[str] = []
             if query_image:
