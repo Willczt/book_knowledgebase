@@ -1,8 +1,11 @@
 import axios from 'axios'
 
+import { authHeaders } from './auth'
+
 const client = axios.create({
   baseURL: '/api/v1',
   timeout: 30_000,
+  headers: authHeaders,
 })
 
 client.interceptors.response.use(

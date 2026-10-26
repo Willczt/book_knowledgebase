@@ -71,7 +71,10 @@ async def search(
         rerank_candidates=body.rerank_candidates,
         trace=trace,
     )
-    results = await retriever.retrieve(kb.qdrant_collection_name, query, trace=trace)
+    # 显式把开关传下去：retriever 靠它区分「本次请求关了重排」和「根本没配置 reranker」
+    results = await retriever.retrieve(
+        kb.qdrant_collection_name, query, use_reranker=use_reranker, trace=trace
+    )
     trace_id = await record_trace(trace)
 
     return SearchResponse(

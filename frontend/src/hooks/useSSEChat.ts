@@ -1,4 +1,5 @@
 import { useRef, useCallback } from 'react'
+import { authHeaders } from '../api/auth'
 import type { ChatRequest, SourceChunk } from '../types/api'
 
 interface UseSSEChatOptions {
@@ -28,7 +29,7 @@ export function useSSEChat() {
       try {
         const response = await fetch(`/api/v1/sessions/${sessionId}/chat/stream`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
           body: JSON.stringify({
             content,
             image: image || undefined,

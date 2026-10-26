@@ -1,5 +1,7 @@
 # Book Knowledgebase RAG 系统使用指南
 
+> **已过时**：本文档为 v1.0 历史版本，其中 `ARK_API_KEY` 为必填的说明已不适用（豆包/Ark 现为可选 provider）。最新文档请见 [USAGE.md](./USAGE.md)。
+
 > 版本：v1.0 | 更新日期：2026-07-22 | 适用环境：Python 3.12 / Node.js 20+
 
 ---

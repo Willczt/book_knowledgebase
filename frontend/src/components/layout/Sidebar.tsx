@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 
+import { authHeaders } from '../../api/auth'
 import { knowledgeBaseApi } from '../../api/knowledgeBase'
 import { documentsApi } from '../../api/documents'
 import { sessionsApi } from '../../api/sessions'
@@ -58,7 +59,7 @@ export function Sidebar({ onOpenDebug }: SidebarProps) {
   const { data: llmProviders } = useQuery<LLMProviderInfo[]>({
     queryKey: ['llm-providers'],
     queryFn: async () => {
-      const r = await fetch('/api/v1/llm-providers')
+      const r = await fetch('/api/v1/llm-providers', { headers: authHeaders })
       return r.json()
     },
   })
@@ -628,7 +629,6 @@ export function Sidebar({ onOpenDebug }: SidebarProps) {
           {([
             ['Ollama', health?.providers?.ollama],
             ['DeepSeek', health?.providers?.deepseek],
-            ['豆包', health?.providers?.ark],
           ] as const).map(([label, provider]) => (
             <span
               key={label}

@@ -39,16 +39,17 @@ cd book_knowledgebase
 cp .env.example .env
 ```
 
-打开 `.env`，**至少**填写以下两项：
+打开 `.env`，按需填写以下配置（二选一即可）：
 
 ```bash
-# 豆包 API Key（用于 Embedding 和问答）
-ARK_API_KEY=your_ark_api_key_here
+# 方式一：DeepSeek（云端，用于问答 / 图片 Caption）
+DEEPSEEK_API_KEY=your_deepseek_api_key_here
 
-# 其余配置保持默认即可快速运行
+# 方式二：Ollama 本地模型（无需任何 API Key）
+OLLAMA_BASE_URL=http://localhost:11434
 ```
 
-> 如果没有豆包 API Key，可先用 Ollama 本地运行，详见 [第 7 节](#7-多模型配置指南)。
+> Embedding 默认走 Ollama 本地模型（如 `nomic-embed-text`）或自建 vLLM，与问答模型相互独立。豆包（火山 Ark）为**可选** provider，不配置 `ARK_API_KEY` 时不会注册。详见 [第 7 节](#7-多模型配置指南)。
 
 ### 1.3 安装后端依赖
 
@@ -103,7 +104,9 @@ make migrate
 
 ```bash
 curl http://localhost:8000/api/v1/health
-# 期望返回：{"status":"ok","qdrant":"connected"}
+# 期望返回（providers 只列出已配置且可连通的 provider）：
+# {"status":"ok","db":"ok","qdrant":"ok",
+#  "providers":{"ollama":{...},"deepseek":{...}}}
 ```
 
 打开浏览器访问 `http://localhost:5173`，页面正常加载即表示全部服务就绪。
@@ -111,12 +114,12 @@ curl http://localhost:8000/api/v1/health
 ### 1.8 创建第一个知识库并上传书籍
 
 ```bash
-# 创建知识库（使用豆包 embedding）
+# 创建知识库（使用 Ollama 本地 embedding）
 python cli/main.py kb create \
   --name "我的书库" \
-  --embedding-provider doubao \
-  --model doubao-embedding-vision-251215 \
-  --dim 2048
+  --embedding-provider ollama \
+  --model nomic-embed-text \
+  --dim 768
 
 # 记录输出中的 ID，例如：3f8a1b2c-...
 
@@ -161,11 +164,11 @@ DATABASE_URL=postgresql+asyncpg://bookrag:bookrag@localhost:5432/bookrag
 
 > 生产部署时建议挂载独立磁盘到 `STORAGE_ROOT` 路径，避免容器重启丢失数据。
 
-### 2.4 豆包 / 火山引擎 Ark 配置
+### 2.4 豆包 / 火山引擎 Ark 配置（可选）
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
-| `ARK_API_KEY` | 空（**必填**） | 火山引擎 Ark 平台 API Key。前往 [火山引擎控制台](https://console.volcengine.com/ark) 获取 |
+| `ARK_API_KEY` | 空（可选） | 火山引擎 Ark 平台 API Key。填写后才会注册豆包 LLM 与 Embedding provider；不填则该 provider 不出现在前端。前往 [火山引擎控制台](https://console.volcengine.com/ark) 获取 |
 | `ARK_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | API 基础地址，通常无需修改 |
 | `DOUBAO_CHAT_MODEL` | `doubao-seed-2-0-lite-260428` | 默认问答模型 ID |
 | `DOUBAO_TEXT_EMBEDDING_MODEL` | `doubao-embedding-vision-251215` | 文本 Embedding 模型 ID |
@@ -277,9 +280,10 @@ rerank 服务不可用时自动回退到 RRF 顺序，并在日志里打 `rerank
 
 1. 点击左侧边栏顶部的「+ 新建知识库」按钮
 2. 填写知识库名称（必填）和描述（选填）
-3. 选择 Embedding 提供商和模型：
-   - **豆包**：选 `doubao-embedding-vision-251215`，维度自动填写 `2048`
+3. 选择 Embedding 提供商和模型（下拉只展示已配置的 provider）：
    - **Ollama**：选 `nomic-embed-text`，维度填写 `768`
+   - **vLLM**：选自托管 embedding 模型，维度按模型填写
+   - **豆包**（可选）：选 `doubao-embedding-vision-251215`，维度 `2048`，需配置 `ARK_API_KEY`
 4. 如需多模态支持（图文混排书籍），勾选「多模态 Embedding」
 5. 点击「创建」
 
@@ -302,10 +306,10 @@ rerank 服务不可用时自动回退到 RRF 顺序，并在日志里打 `rerank
 ### 3.4 开始对话
 
 1. 点击左侧边栏的「+ 新建会话」（或点击已有会话继续）
-2. 选择当前会话使用的 LLM 提供商和模型：
-   - **豆包**：需填写 `ARK_API_KEY`
-   - **DeepSeek**：需填写 `DEEPSEEK_API_KEY`
-   - **Ollama**：本地服务，无需 API Key
+2. 选择当前会话使用的 LLM 提供商和模型（下拉列表只展示已配置的 provider）：
+  - **DeepSeek**：需填写 `DEEPSEEK_API_KEY`
+  - **Ollama**：本地服务，无需 API Key
+  - **豆包**（可选）：需填写 `ARK_API_KEY`，未配置时不出现在列表中
 3. 在底部输入框输入问题，按 Enter 或点击发送按钮
 4. 助手回答以流式方式逐字输出（SSE）
 5. 回答结束后，右侧面板展示引用的文档来源，包含：
@@ -472,11 +476,11 @@ python cli/main.py search "梯度消失问题" --kb-id 3f8a1b2c-... --top-k 3
 ### 4.4 交互式对话
 
 ```bash
-# 使用豆包（默认）
+# 使用 DeepSeek（默认）
 python cli/main.py chat --kb-id 3f8a1b2c-...
 
-# 使用 DeepSeek
-python cli/main.py chat --kb-id 3f8a1b2c-... --llm-provider deepseek
+# 使用豆包（需配置 ARK_API_KEY）
+python cli/main.py chat --kb-id 3f8a1b2c-... --llm-provider doubao
 
 # 使用 Ollama 本地模型
 python cli/main.py chat --kb-id 3f8a1b2c-... --llm-provider ollama --llm-model qwen2.5:7b
@@ -487,7 +491,7 @@ python cli/main.py chat --kb-id 3f8a1b2c-... --llm-provider ollama --llm-model q
 ```
 ╭────────────────────── 对话 ──────────────────────────╮
 │ BookRAG 对话模式                                      │
-│ 知识库: 3f8a1b2c-... | LLM: doubao                   │
+│ 知识库: 3f8a1b2c-... | LLM: deepseek                 │
 │ 输入 exit 或 Ctrl+C 退出                              │
 ╰──────────────────────────────────────────────────────╯
 会话 ID: 9a0b1c2d-...
@@ -685,8 +689,8 @@ Content-Type: application/json
 
 {
   "kb_id": "3f8a1b2c-...",
-  "llm_provider": "doubao",
-  "llm_model_id": "doubao-seed-2-0-lite-260428",
+  "llm_provider": "deepseek",
+  "llm_model_id": "deepseek-chat",
   "llm_config": {
     "temperature": 0.7,
     "max_tokens": 2048
@@ -702,8 +706,8 @@ Content-Type: application/json
   "id": "9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d",
   "kb_id": "3f8a1b2c-...",
   "title": "深度学习问答",
-  "llm_provider": "doubao",
-  "llm_model_id": "doubao-seed-2-0-lite-260428",
+  "llm_provider": "deepseek",
+  "llm_model_id": "deepseek-chat",
   "llm_config": {"temperature": 0.7, "max_tokens": 2048},
   "created_at": "2026-07-22T10:10:00.000Z",
   "updated_at": "2026-07-22T10:10:00.000Z"
@@ -882,17 +886,19 @@ GET /api/v1/health
 
 ```
 图片文件
-  → Vision LLM (doubao-seed-2-0-lite / Ollama llava)
+  → Vision LLM (deepseek-flash / doubao-seed-2-0-lite / Ollama llava)
   → 生成中文描述："这是一张展示神经网络结构的图表，包含输入层..."
   → 创建文本 chunk（type=image）
   → chunk.payload.image_path 保存图片磁盘路径（前端可请求 /images/{path} 展示原图）
 ```
 
-Caption 提供商优先级：
+Caption 提供商优先级（`backend/core/llm/registry.py` 的 `get_caption_provider`）：
 
-1. **Doubao Vision**：质量最高，需要 `ARK_API_KEY`
-2. **Ollama llava**：本地推理，无需 API Key，但需要先拉取模型
-3. **降级（无 Caption）**：图片 chunk 使用占位文字，不影响文字检索功能
+1. **显式指定**：设置 `CAPTION_PROVIDER` / `CAPTION_MODEL_ID` 时直接使用（默认 `.env.example` 为 `deepseek` / `deepseek-flash`）
+2. **Doubao Vision**（可选）：需要 `ARK_API_KEY`
+3. **DeepSeek**：需要 `DEEPSEEK_API_KEY`，`deepseek-flash` 支持图像输入
+4. **Ollama llava**：本地推理，无需 API Key，但需要先拉取模型
+5. **降级（无 Caption）**：图片 chunk 使用占位文字，不影响文字检索功能
 
 ### 6.3 文本分块策略
 
@@ -966,9 +972,11 @@ pending → processing → indexed
 
 ## 7. 多模型配置指南
 
-### 7.1 豆包（Doubao / 火山引擎 Ark）
+> **默认组合**：问答 / Caption 用 DeepSeek（`deepseek-flash`），Embedding 用 Ollama 或 vLLM。豆包（火山 Ark）属于可选 provider，只有配置 `ARK_API_KEY` 才会注册。以下各节任选其一或自由组合。
 
-**适用场景**：推荐默认选择，支持中文优化，支持多模态（图文混排书籍）
+### 7.1 豆包（Doubao / 火山引擎 Ark，可选）
+
+**适用场景**：需要中文优化与多模态（图文混排书籍）Embedding 时可选；需要先配置 `ARK_API_KEY`
 
 **配置步骤**：
 
@@ -1026,7 +1034,7 @@ DEEPSEEK_MODEL=deepseek-chat
 
 **使用 DeepSeek 作为问答模型：**
 
-DeepSeek 仅支持作为问答 LLM，不支持作为 Embedding 提供商。创建知识库时仍需要使用 doubao 或 ollama 的 embedding 模型。在前端对话设置中，选择 LLM 提供商为 `deepseek` 即可。
+DeepSeek 仅支持作为问答 LLM（以及 Caption），不支持作为 Embedding 提供商。创建知识库时需使用 ollama 或 vLLM 的 embedding 模型（也可选用可选的 doubao）。在前端对话设置中，选择 LLM 提供商为 `deepseek` 即可。
 
 ```bash
 # CLI 中指定 DeepSeek 作为问答模型
@@ -1124,11 +1132,11 @@ vLLM 目前不支持作为 Embedding 提供商，Embedding 仍需使用 doubao �
 
 | 场景 | Embedding 模型 | 问答模型 | 说明 |
 |------|----------------|----------|------|
-| 标准中文书籍 | doubao-embedding-vision-251215 | doubao-seed-2-0-lite | 默认推荐 |
-| 图文混排书籍 | doubao-embedding-vision-251215（多模态） | doubao-seed-2-0-lite | 开启 `--multimodal` |
+| 默认（云端问答 + 本地向量） | ollama/nomic-embed-text | deepseek-chat | 只需 `DEEPSEEK_API_KEY` |
 | 完全本地化 | ollama/nomic-embed-text | ollama/qwen2.5:7b | 零 API 费用，需 GPU |
-| 高质量推理 | doubao-embedding-vision-251215 | deepseek-chat | Embedding 走豆包，问答走 DeepSeek |
-| 生产高并发 | doubao-embedding-vision-251215 | vLLM/自托管模型 | Embedding 走豆包，LLM 自托管 |
+| 高质量推理 | ollama/nomic-embed-text | deepseek-chat | 推理型问答 |
+| 生产高并发 | vllm/自托管 embedding | vLLM/自托管模型 | LLM 自托管 |
+| 中文 + 图文混排（可选） | doubao-embedding-vision-251215（多模态） | deepseek-chat 或 doubao-seed-2-0-lite | 需 `ARK_API_KEY`，开启 `--multimodal` |
 
 ---
 
@@ -1168,26 +1176,26 @@ docker compose logs -f backend
 
 常见原因：
 - Python 依赖缺失（重新执行 `make install`）
-- ARK_API_KEY 未配置导致 embedding 调用失败
+- Embedding provider 不可用（Ollama 未启动 / vLLM 地址错误 / 所选模型未拉取）
 - Qdrant 服务中断
 
 ---
 
-### Q3：摄入失败，状态变为 `failed`，错误信息为 `Doubao embedding API error`
+### Q3：摄入失败，状态变为 `failed`，错误信息为 `EmbeddingProviderUnavailable`
 
-**原因**：豆包 API Key 无效或模型未开通。
+**原因**：所选 Embedding provider 不可用（服务未启动、模型未拉取、Key 无效）。后端会把原始异常翻译成中文提示，直接看 `error_message` 即可定位。
 
 **解决方案**：
 
-1. 确认 `.env` 中的 `ARK_API_KEY` 正确
-2. 前往火山引擎控制台确认 `doubao-embedding-vision-251215` 模型已开通
-3. 测试 API Key 是否有效：
+1. 对照 `error_message` 判断类型（连接失败 / 超时 / 鉴权失败 / 模型不存在），详见 `backend/core/error_mapping.py`
+2. 若用 Ollama：确认 `ollama serve` 正在运行，并已 `ollama pull nomic-embed-text`
+3. 若用 vLLM：确认 `VLLM_BASE_URL` 指向的服务已启动、模型名与 `--served-model-name` 一致
+4. 手动验证 Ollama 可用性：
 
 ```bash
-curl https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal \
-  -H "Authorization: Bearer $ARK_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"doubao-embedding-vision-251215","input":[{"type":"text","text":"测试"}]}'
+ollama list
+curl http://localhost:11434/api/embeddings \
+  -d '{"model":"nomic-embed-text","prompt":"测试"}'
 ```
 
 ---
@@ -1227,7 +1235,7 @@ python -c "from fastembed import SparseTextEmbedding; SparseTextEmbedding(model_
 
 **解决方案**：
 
-1. 确认 `ARK_API_KEY` 配置正确，或 Ollama 正在运行且已拉取 llava 模型
+1. 确认 Caption provider 可用：`CAPTION_PROVIDER=deepseek` 时需 `DEEPSEEK_API_KEY`；用 Ollama 时需服务运行且已拉取 llava（或 `OLLAMA_VISION_MODEL` 指定的模型）
 2. 图片 Caption 失败不影响文字内容的摄入，文字部分仍会正常索引
 3. 若需要多模态检索，修复 Vision LLM 配置后，清空知识库重新摄入：
 
@@ -1254,7 +1262,7 @@ python cli/main.py ingest ./book.pdf --kb-id xxx
 
 3. **Top-K 过小**：增大 `DEFAULT_TOP_K` 至 10-15
 
-4. **embedding 模型不匹配**：中文书籍强烈建议使用豆包 embedding，英文书籍可以考虑 nomic-embed-text
+4. **embedding 模型不匹配**：中文书籍建议用 `bge-m3`（Ollama）或多模态豆包 embedding，英文书籍可以考虑 nomic-embed-text
 
 ---
 

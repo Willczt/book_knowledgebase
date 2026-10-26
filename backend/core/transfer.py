@@ -134,7 +134,23 @@ def _read_manifest(archive: Any, expected_kind: str) -> tuple[zipfile.ZipFile, d
 
     # 校验失败时关闭文件句柄，成功则交给调用方 with 管理
     try:
-        names = set(zf.namelist())
+        infos = zf.infolist()
+        if len(infos) > settings.import_max_entries:
+            raise ValueError(f"导入包条目过多（>{settings.import_max_entries}）")
+
+        # zip bomb / 路径穿越：条目名不能是绝对路径，也不能包含 ..，
+        # 解压后总体积必须有上限（压缩比可以做到 1000:1 以上）
+        total_uncompressed = 0
+        for info in infos:
+            name = info.filename
+            parts = Path(name.replace("\\", "/")).parts
+            if name.startswith("/") or ".." in parts:
+                raise ValueError(f"导入包包含非法路径：{name[:80]}")
+            total_uncompressed += info.file_size
+            if total_uncompressed > settings.import_max_uncompressed_bytes:
+                raise ValueError("导入包解压后体积超过限制")
+
+        names = {info.filename for info in infos}
         if MANIFEST_NAME not in names:
             raise ValueError("导入包缺少 manifest.json")
         try:

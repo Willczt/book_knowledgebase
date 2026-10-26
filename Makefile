@@ -26,21 +26,20 @@ dev: dev-qdrant
 	@echo "Run 'make dev-backend' in another terminal"
 	@echo "Run 'make dev-frontend' in another terminal"
 
-# 安装后端依赖
+# 安装后端依赖（以 pyproject 为唯一来源，避免 requirements.txt 与它漂移）
 install:
-	cd backend && pip install -e ".[dev]" 2>/dev/null || pip install -r requirements.txt
+	cd backend && $(PY) -c "import subprocess,sys,tomllib;d=tomllib.load(open('pyproject.toml','rb'))['project']['dependencies'];subprocess.check_call([sys.executable,'-m','pip','install',*d])"
+	cd backend && $(PY) -m pip install pytest pytest-asyncio ruff
 
 # 安装前端依赖
 install-frontend:
 	cd frontend && npm install
 
-# 数据库迁移
+# 初始化/补齐表结构
+# 说明：当前用 create_all + 增量列兼容（幂等），尚未建立 Alembic 基线；
+# 有存量数据后要正式引入迁移，需要先 alembic stamp 再生成新版本。
 migrate:
-	cd backend && alembic upgrade head
-
-# 生成新迁移
-migration:
-	cd backend && alembic revision --autogenerate -m "$(msg)"
+	cd backend && $(PY) -c "import asyncio; from db.engine import init_db; asyncio.run(init_db()); print('schema ready')"
 
 # 代码检查（后端 ruff + 前端 eslint/tsc）
 lint:

@@ -126,7 +126,6 @@ export interface HealthResponse {
   providers: {
     ollama: ProviderHealth
     deepseek: ProviderHealth
-    ark: ProviderHealth
   }
 }
 

@@ -16,7 +16,7 @@ from typing import Any, Optional
 # 任务与临时包保留时间：过期后自动清理，避免磁盘堆积
 JOB_TTL_SECONDS = 30 * 60
 
-_JOBS: dict[str, "ExportJob"] = {}
+_JOBS: dict[str, ExportJob] = {}
 
 
 @dataclass

@@ -1,6 +1,6 @@
 """BM25 稀疏编码：中文分词是否可用、是否稳定。"""
 
-from core.retrieval.sparse import TOKENIZER_VERSION, encode, embed_sparse, tokenize
+from core.retrieval.sparse import TOKENIZER_VERSION, embed_sparse, encode, tokenize
 
 
 def test_chinese_query_is_split_into_multiple_terms():

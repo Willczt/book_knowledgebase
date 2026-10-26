@@ -3,10 +3,10 @@ BookRAG CLI - 终端交互工具
 
 使用示例：
   bookrag kb list
-  bookrag kb create --name "ML Books" --embedding-provider doubao --model doubao-embedding-text-240715 --dim 2048
+  bookrag kb create --name "ML Books" --embedding-provider ollama --model nomic-embed-text --dim 768
   bookrag ingest ./mybook.pdf --kb-id <id>
   bookrag search "什么是反向传播" --kb-id <id>
-  bookrag chat --kb-id <id> --llm-provider doubao
+  bookrag chat --kb-id <id> --llm-provider deepseek
   bookrag kb clear --kb-id <id>
 """
 import asyncio
@@ -245,7 +245,7 @@ def search(
 @app.command("chat")
 def chat(
     kb_id: str = typer.Option(..., "--kb-id", help="知识库 ID"),
-    llm_provider: str = typer.Option("doubao", "--llm-provider", help="LLM 提供商"),
+    llm_provider: str = typer.Option("deepseek", "--llm-provider", help="LLM 提供商"),
     llm_model: Optional[str] = typer.Option(None, "--llm-model", help="LLM 模型 ID"),
 ):
     """交互式命令行对话"""

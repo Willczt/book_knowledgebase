@@ -52,16 +52,18 @@ cd book_knowledgebase
 cp .env.example .env
 ```
 
-编辑 `.env`，必填项：
+编辑 `.env`，按需填写（二选一即可）：
 ```env
-# 豆包（火山引擎 Ark）
-ARK_API_KEY=your_key
-DOUBAO_CHAT_MODEL=doubao-seed-1-6-250715
-DOUBAO_EMBEDDING_MODEL=doubao-embedding-text-240715
-
-# 或 DeepSeek
+# 方式一：DeepSeek（问答 / 图片 Caption）
 DEEPSEEK_API_KEY=your_key
+
+# 方式二：Ollama 本地模型（无需 API Key）
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_DEFAULT_CHAT_MODEL=qwen2.5:7b
+OLLAMA_DEFAULT_EMBED_MODEL=nomic-embed-text
 ```
+
+> Embedding 默认使用 Ollama 本地模型或自建 vLLM。豆包（火山 Ark）是**可选** provider，配置 `ARK_API_KEY` 后才会注册。
 
 ### 2. 启动服务
 
@@ -207,7 +209,7 @@ book-rag chat --kb-id <id> --provider doubao --model doubao-seed-1-6-250715
 | `LLM_TIMEOUT` | `120` | 对话请求超时（秒）|
 | `EMBEDDING_TIMEOUT` | `120` | embedding 批量请求超时（秒），本地 Ollama 大 batch 可调大 |
 | `CAPTION_TIMEOUT` | `60` | 单张图片 caption 超时（秒）|
-| `CAPTION_PROVIDER` / `CAPTION_MODEL_ID` | - | 图片 caption 用的多模态模型；留空则按 豆包 → DeepSeek(`deepseek-flash`) → Ollama 自动选择 |
+| `CAPTION_PROVIDER` / `CAPTION_MODEL_ID` | `deepseek` / `deepseek-flash` | 图片 caption 用的多模态模型；留空则按 豆包（若配置）→ DeepSeek → Ollama 自动选择 |
 | `CAPTION_MAX_TOKENS` | `2048` | caption 生成上限，推理模型需留足思考预算 |
 | `CAPTION_CONCURRENCY` | `5` | 并发 caption 请求数 |
 | `OLLAMA_VISION_MODEL` | `llava` | Ollama 本地视觉模型，可换 `qwen2.5vl`、`gemma3` 等 |

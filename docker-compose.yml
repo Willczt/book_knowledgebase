@@ -1,48 +1,69 @@
+# 生产形态编排：
+# - 只把前端 80 暴露到公网；数据库/向量库/后端端口绑定 127.0.0.1，便于本机调试但不对外
+# - 后端带健康检查，网关可据 /readyz 摘流量
+# - 所有服务限制容器日志大小，避免长期运行把磁盘写满
 services:
   qdrant:
     image: docker.m.daocloud.io/qdrant/qdrant:v1.17.0
+    restart: unless-stopped
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
-    environment:
-      QDRANT__SERVICE__HTTP_PORT: 6333
-    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:6333/healthz || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:6333/healthz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
 
   postgres:
     image: docker.m.daocloud.io/library/postgres:16-alpine
+    restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
-      POSTGRES_USER: bookrag
-      POSTGRES_PASSWORD: bookrag
-      POSTGRES_DB: bookrag
+      POSTGRES_USER: ${POSTGRES_USER:-bookrag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bookrag}
+      POSTGRES_DB: ${POSTGRES_DB:-bookrag}
+      # 连接数 = 后端连接池上限 + 余量，避免 worker 扩容后打满
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command: ["postgres", "-c", "max_connections=100", "-c", "shared_buffers=256MB"]
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bookrag"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bookrag} -d ${POSTGRES_DB:-bookrag}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://bookrag:bookrag@postgres:5432/bookrag
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-bookrag}:${POSTGRES_PASSWORD:-bookrag}@postgres:5432/${POSTGRES_DB:-bookrag}
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6333
       STORAGE_ROOT: /app/storage
+      LOG_FORMAT: json
+      LOG_LEVEL: INFO
+      # 单 worker：调试 trace / 摄入进度是进程内状态；要横向扩容需先把它们挪到 Redis/PG
+      WEB_CONCURRENCY: "1"
+      INGEST_WORKERS: "2"
     volumes:
       - ./storage:/app/storage
     env_file:
@@ -52,17 +73,40 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    restart: unless-stopped
+    # 给在跑的摄入任务留出收尾时间（与 SHUTDOWN_GRACE_SECONDS 对齐）
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
       - "80:80"
     depends_on:
-      - backend
-    restart: unless-stopped
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
 
 volumes:
   qdrant_data:

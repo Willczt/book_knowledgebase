@@ -106,7 +106,7 @@ class HybridRetriever:
                     "sparse_terms": len(indices),
                     "sparse_top_terms": [
                         {"index": int(i), "weight": round(float(v), 6)}
-                        for i, v in list(zip(indices, values))[:10]
+                        for i, v in list(zip(indices, values, strict=True))[:10]
                     ],
                     "has_image": query_image is not None,
                 },
@@ -173,6 +173,36 @@ class HybridRetriever:
                 results = await self._reranker.rerank(
                     query.query_text, results, trace=trace
                 )
+        elif trace is not None and trace.on("rerank"):
+            # 没走到 rerank() 时也要留一条记录，否则 trace 的 rerank 段整段缺失，
+            # 前端只能显示「未开启重排层或未触发重排」，无法定位是配置关了还是服务不可用
+            from core.retrieval.reranker import record_rerank_skip
+
+            backend_name = (settings.rerank_backend or "http").strip().lower()
+            model_name = getattr(self._reranker, "model_name", None) or settings.rerank_model
+            if use_reranker is False:
+                status = "disabled"
+                reason = (
+                    "本次请求未启用重排（use_reranker=false）："
+                    "可能来自界面开关，或 RERANK_ENABLED=false；结果按融合分排序"
+                )
+            elif self._reranker is None:
+                status = "unavailable"
+                reason = "未构建 reranker：检查 RERANK_ENABLED 与 RERANK_BACKEND 配置"
+            else:
+                status = "skipped"
+                reason = (
+                    f"过滤后仅剩 {len(results)} 条候选"
+                    f"（score_threshold={query.score_threshold:g}），少于 2 条无需重排"
+                )
+            record_rerank_skip(
+                trace,
+                backend=backend_name,
+                model=model_name,
+                results=results,
+                status=status,
+                reason=reason,
+            )
 
         final = results[: query.top_k]
         dropped = results[query.top_k:]

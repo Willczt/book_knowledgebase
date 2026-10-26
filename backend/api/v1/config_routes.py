@@ -33,7 +33,7 @@ async def list_llm_providers():
 @router.get("/health")
 async def health_check():
     """
-    检查数据库 / Qdrant 连接，并探测外部模型服务（Ollama、DeepSeek、豆包）的连通性。
+    检查数据库 / Qdrant 连接，并探测外部模型服务（Ollama、DeepSeek）的连通性。
 
     providers 里每项的 ok=false 表示该服务当前不可用，error 字段给出可读原因，
     前端可据此提前提示"embedding 后端未启动"，而不用等到摄入失败。
@@ -60,17 +60,15 @@ async def health_check():
     except Exception as e:
         status["qdrant"] = f"error: {e}"
 
-    # 三个外部服务并发探测，任一失败不影响其它
-    ollama_result, deepseek_result, ark_result = await asyncio.gather(
+    # 外部服务并发探测，任一失败不影响其它
+    ollama_result, deepseek_result = await asyncio.gather(
         health.check_ollama(),
         health.check_deepseek(),
-        health.check_ark(),
     )
 
     providers = {
         "ollama": ollama_result,
         "deepseek": deepseek_result,
-        "ark": ark_result,
     }
 
     overall = "ok" if all(v == "ok" for v in status.values()) else "degraded"

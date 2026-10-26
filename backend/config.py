@@ -21,6 +21,10 @@ class Settings(BaseSettings):
 
     # 数据库
     database_url: str = "sqlite+aiosqlite:///./storage/app.db"
+    # 连接池（仅 PostgreSQL 生效）
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_recycle: int = 1800
 
     # Qdrant
     qdrant_host: str = "localhost"
@@ -30,7 +34,8 @@ class Settings(BaseSettings):
     # 存储
     storage_root: str = "./storage"
 
-    # Doubao / Ark
+    # 可选 provider：豆包（火山 Ark）
+    # 未配置 ARK_API_KEY 时不会注册 doubao 的 LLM/Embedding，下面几个模型名保持默认即可
     ark_api_key: Optional[str] = None
     ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     doubao_chat_model: str = "doubao-seed-2-0-lite-260428"
@@ -75,13 +80,31 @@ class Settings(BaseSettings):
     # Ollama 本地视觉模型名（可换成 qwen2.5vl / gemma3 等多模态模型）
     ollama_vision_model: str = "llava"
 
-    # 后台任务
-    # 启动时把遗留的 pending/processing 文档标记为 failed
-    cleanup_stale_documents: bool = True
-    # 心跳超过该秒数未更新，视为任务已死（防止进程活着但卡死）
-    stale_task_grace_seconds: int = 300
-    # 摄入任务心跳写盘间隔（秒）
-    task_heartbeat_interval: int = 15
+    # 后台任务（DB 队列 + 进程内 worker）
+    # 同时进行的摄入任务数。Ollama 单卡建议 1~2；CPU/远程 API 可调大
+    ingest_workers: int = 2
+    # 失败重试次数（含首次），超过后落 failed
+    ingest_max_attempts: int = 3
+    # 任务租约：超时未续租视为 worker 已死，文档会被重新放回队列
+    ingest_lease_seconds: int = 1800
+    # 续租间隔
+    ingest_lease_renew_seconds: int = 60
+    # 关闭时等待在跑任务结束的最长时间
+    shutdown_grace_seconds: int = 30
+    # 队列空闲时的轮询间隔（用于处理 next_retry_at 到期的任务）
+    ingest_poll_seconds: float = 2.0
+
+    # 日志：console（开发）| json（生产，便于采集）
+    log_level: str = "INFO"
+    log_format: str = "console"
+
+    # 可选 API 访问令牌：留空表示不校验。设置后所有 /api/* 请求需带
+    # Authorization: Bearer <token>（前端用 VITE_API_TOKEN 注入）
+    api_token: Optional[str] = None
+
+    # 导入包上限：压缩包 2GB 由 MAX_IMPORT_BYTES 控制，这里防 zip bomb
+    import_max_entries: int = 20000
+    import_max_uncompressed_bytes: int = 8 * 1024**3
 
     # 多轮对话：检索前把依赖上文的追问改写成可独立检索的问题
     # llm = 用 LLM 改写；concat = 仅拼接上一轮问题（不额外调用模型）；off = 关闭

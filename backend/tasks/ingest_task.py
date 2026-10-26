@@ -1,4 +1,10 @@
-import asyncio
+"""文档摄入：解析 → 分块 → 向量化 → 写入 Qdrant。
+
+任务只接受 doc_id，其余信息在任务内部从数据库读取。这样 API 进程和独立 worker
+走的是同一条路径，重试时也能拿到最新的文档/知识库配置。
+
+失败一律抛异常交给 worker 决定重试或落终态；本模块只负责清理本次写入的半截向量。
+"""
 
 import structlog
 
@@ -12,85 +18,48 @@ logger = structlog.get_logger()
 settings = get_settings()
 
 
-async def run_ingest_task(
-    doc_id: str,
-    file_path: str,
-    source_doc: str,
-    kb_id: str,
-    kb_embedding_provider: str,
-    kb_embedding_model_id: str,
-    kb_embedding_vector_dim: int,
-    kb_qdrant_collection: str,
-    caption_provider: str | None = None,
-    caption_model_id: str | None = None,
-) -> None:
-    """
-    异步后台摄入任务。
-    由 API 层通过 asyncio.create_task() 调用。
-    """
+async def run_ingest_task(doc_id: str) -> None:
     from db import crud
     from db.engine import AsyncSessionLocal
-    from tasks import liveness
     from tasks import progress as ingest_progress
-
-    # 心跳：启动清理用它判断任务是否还活着（多 worker 下不会误杀）
-    stop_beat = asyncio.Event()
-    beat_task = asyncio.create_task(_heartbeat_loop(doc_id, stop_beat))
-    ingest_progress.start(doc_id)
 
     async with AsyncSessionLocal() as db:
         doc = await crud.get_document(db, doc_id)
         if doc is None:
-            logger.error("ingest_task_doc_not_found", doc_id=doc_id)
-            stop_beat.set()
-            beat_task.cancel()
-            await asyncio.gather(beat_task, return_exceptions=True)
-            liveness.clear(doc_id)
+            logger.info("ingest_skipped_doc_missing", doc_id=doc_id)
             return
+        kb = await crud.get_kb(db, doc.kb_id)
+        if kb is None:
+            raise RuntimeError("知识库已被删除，无法继续摄入")
 
-        # 更新状态
-        await crud.update_document(db, doc, {
-            "status": "processing",
-            "processing_started_at": utcnow(),
-        })
-        logger.info("🚀 摄入任务开始", doc_id=doc_id, source_doc=source_doc, kb_id=kb_id,
-                    embedding_model=kb_embedding_model_id)
+        file_path = doc.file_path
+        source_doc = doc.filename
+        kb_id = kb.id
+        collection = kb.qdrant_collection_name
+        embedding_provider_name = kb.embedding_provider
+        embedding_model_id = kb.embedding_model_id
+        embedding_dim = kb.embedding_vector_dim
+        caption_provider = kb.caption_provider
+        caption_model_id = kb.caption_model_id
 
-    # 客户端在 finally 中统一关闭：失败路径同样会泄漏连接
+    logger.info(
+        "ingest_started",
+        doc_id=doc_id,
+        source_doc=source_doc,
+        kb_id=kb_id,
+        embedding_model=embedding_model_id,
+    )
+
     vector_store = QdrantVectorStore()
-
     try:
-        # 获取 embedding provider
-        registry = get_embedding_registry()
-        try:
-            embedding_provider = registry.get(kb_embedding_provider, kb_embedding_model_id)
-        except KeyError:
-            # 动态注册（用于自定义 Ollama/vLLM 模型）
-            embedding_provider = registry.register_dynamic(
-                kb_embedding_provider,
-                kb_embedding_model_id,
-                kb_embedding_vector_dim,
-            )
+        embedding_provider = await _resolve_embedding(
+            embedding_provider_name, embedding_model_id, embedding_dim
+        )
+        caption_llm = _resolve_caption(caption_provider, caption_model_id)
 
-        # caption 模型：知识库指定的优先，失败则回退到全局优先级
-        caption_llm = None
-        if caption_provider and caption_model_id:
-            try:
-                from core.llm.registry import create_llm_provider
-
-                caption_llm = create_llm_provider(caption_provider, caption_model_id)
-            except Exception as e:
-                logger.warning(
-                    "kb_caption_provider_invalid",
-                    provider=caption_provider,
-                    model_id=caption_model_id,
-                    error=str(e),
-                )
-
-        # 创建一个临时 KB 对象供 Indexer 使用
         class _KB:
             id = kb_id
-            qdrant_collection_name = kb_qdrant_collection
+            qdrant_collection_name = collection
 
         indexer = DocumentIndexer(
             vector_store=vector_store,
@@ -107,10 +76,9 @@ async def run_ingest_task(
             progress=lambda payload: ingest_progress.update(doc_id, payload),
         )
 
-        # 更新状态为成功
         async with AsyncSessionLocal() as db:
             doc = await crud.get_document(db, doc_id)
-            if doc:
+            if doc is not None:
                 await crud.update_document(db, doc, {
                     "status": "indexed",
                     "chunk_count": chunk_count,
@@ -118,41 +86,56 @@ async def run_ingest_task(
                     "processing_completed_at": utcnow(),
                     "error_message": None,
                 })
-
-    except Exception as e:
-        logger.error("ingest_task_failed", doc_id=doc_id, error=str(e), exc_info=True)
+        logger.info(
+            "ingest_succeeded",
+            doc_id=doc_id,
+            chunks=chunk_count,
+            images=image_count,
+        )
+    except Exception as exc:
+        logger.error(
+            "ingest_failed",
+            doc_id=doc_id,
+            error=f"{type(exc).__name__}: {exc}"[:500],
+            exc_info=True,
+        )
         # 清掉本次已写入的半截向量，否则重试会产生重复 chunk
         try:
-            await vector_store.delete_doc_points(kb_qdrant_collection, doc_id)
+            await vector_store.delete_doc_points(collection, doc_id)
         except Exception as cleanup_error:
             logger.warning(
-                "ingest_rollback_failed", doc_id=doc_id, error=str(cleanup_error)[:300]
+                "ingest_rollback_failed",
+                doc_id=doc_id,
+                error=str(cleanup_error)[:300],
             )
-        async with AsyncSessionLocal() as db:
-            doc = await crud.get_document(db, doc_id)
-            if doc:
-                await crud.update_document(db, doc, {
-                    "status": "failed",
-                    "error_message": str(e)[:2000],
-                    "processing_completed_at": utcnow(),
-                })
+        raise
     finally:
         await vector_store.close()
-        stop_beat.set()
-        beat_task.cancel()
-        await asyncio.gather(beat_task, return_exceptions=True)
-        liveness.clear(doc_id)
         ingest_progress.finish(doc_id)
 
 
-async def _heartbeat_loop(doc_id: str, stop: asyncio.Event) -> None:
-    """任务运行期间定期刷新心跳文件"""
-    from tasks import liveness
+async def _resolve_embedding(provider: str, model_id: str, vector_dim: int):
+    registry = get_embedding_registry()
+    try:
+        return registry.get(provider, model_id)
+    except KeyError:
+        # 动态注册（用于自定义 Ollama/vLLM 模型）
+        return registry.register_dynamic(provider, model_id, vector_dim)
 
-    liveness.beat(doc_id)
-    while not stop.is_set():
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=settings.task_heartbeat_interval)
-            return
-        except TimeoutError:
-            liveness.beat(doc_id)
+
+def _resolve_caption(provider: str | None, model_id: str | None):
+    """caption 模型：知识库指定的优先，失败则回退到全局优先级。"""
+    if not provider or not model_id:
+        return None
+    from core.llm.registry import create_llm_provider
+
+    try:
+        return create_llm_provider(provider, model_id)
+    except Exception as exc:
+        logger.warning(
+            "kb_caption_provider_invalid",
+            provider=provider,
+            model_id=model_id,
+            error=str(exc)[:200],
+        )
+        return None

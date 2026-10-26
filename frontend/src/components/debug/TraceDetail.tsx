@@ -6,7 +6,6 @@ import { debugApi } from '../../api/debug'
 import type {
   GenerationSection,
   QuerySection,
-  RerankSection,
   RetrievalRow,
   RetrievalSection,
   TraceDetail as TraceDetailData,
@@ -262,18 +261,73 @@ function RetrievalView({ data }: { data?: RetrievalSection }) {
   )
 }
 
-function RerankView({ data }: { data?: RerankSection }) {
-  if (!data) return <p className="text-[11px] text-gray-600">未开启重排层或未触发重排</p>
+const LAYER_LABEL: Record<string, string> = {
+  rerank: '重排',
+  generation: '生成 / Prompt',
+}
+
+/** 某个观测层没有数据时，区分「层没开」和「开了但这次没触发」 */
+function LayerHint({ layer, layers }: { layer: string; layers: string[] }) {
+  if (!layers.includes(layer)) {
+    return (
+      <div className="flex gap-1.5 text-[11px] text-amber-300/85">
+        <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+        <span className="break-words">
+          这条 trace 未采集「{LAYER_LABEL[layer] ?? layer}」：记录时该观测层是关闭的（旧版本 trace 也会如此）。
+          在左上方「观测层」里打开后重新提问即可。
+        </span>
+      </div>
+    )
+  }
+  return (
+    <p className="text-[11px] text-gray-600">
+      该观测层已开启，但本次请求没有产生数据。若这是升级前记录的旧 trace，重新提问即可。
+    </p>
+  )
+}
+
+function LayerBadge({ on }: { on: boolean }) {
+  if (on) return null
+  return <span className="text-[10px] text-amber-300/80">层未开启</span>
+}
+
+const RERANK_STATUS_LABEL: Record<string, string> = {
+  applied: '已生效',
+  skipped: '已跳过',
+  disabled: '本请求关闭',
+  unavailable: '未配置',
+  cooldown: '冷却中',
+  failed: '调用失败',
+}
+
+function RerankView({ trace }: { trace: TraceDetailData }) {
+  const [showAll, setShowAll] = useState(false)
+  const data = trace.rerank
+  if (!data) return <LayerHint layer="rerank" layers={trace.layers} />
+
   const rows = data.candidates_detail || []
+  // 只有 id + 名次变化无法判断重排是否合理，用检索层明细补回来源与原文
+  const chunkMap = new Map<string, RetrievalRow>()
+  for (const row of trace.retrieval?.results || []) chunkMap.set(row.chunk_id, row)
+
   // 兼容旧格式：candidates 曾经被写成明细数组
   const candidatesRaw = data.candidates as unknown
   const candidateCount = Array.isArray(candidatesRaw)
     ? candidatesRaw.length
     : (data.candidates ?? 0)
+  const status = data.status ?? (data.enabled ? 'applied' : 'unknown')
+  const up = rows.filter((row) => row.rank_before > row.rank_after).length
+  const down = rows.filter((row) => row.rank_before < row.rank_after).length
+  const visible = showAll ? rows : rows.slice(0, 10)
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-1.5">
-        <Pill label="状态" value={data.status ?? '—'} tone={data.status === 'applied' ? 'good' : 'warn'} />
+        <Pill
+          label="状态"
+          value={RERANK_STATUS_LABEL[status] ?? status}
+          tone={status === 'applied' ? 'good' : status === 'failed' ? 'warn' : 'muted'}
+        />
         <Pill label="后端" value={data.backend ?? '—'} />
         <Pill label="模型" value={data.model ?? '—'} />
         <Pill label="候选" value={candidateCount} />
@@ -281,32 +335,81 @@ function RerankView({ data }: { data?: RerankSection }) {
         {data.top_score !== null && data.top_score !== undefined && (
           <Pill label="最高分" value={fmt(data.top_score, 4)} />
         )}
+        {rows.length > 0 && <Pill label="升/降" value={`↑${up} ↓${down}`} />}
       </div>
+
+      {data.reason && (
+        <div
+          className={clsx(
+            'text-[10px] leading-relaxed break-words',
+            status === 'applied' ? 'text-gray-600' : 'text-amber-300/85',
+          )}
+        >
+          {data.reason}
+        </div>
+      )}
       {data.error && <div className="text-[10px] text-red-300/90 break-words">{data.error}</div>}
 
       {rows.length > 0 && (
         <div className="space-y-1">
-          {rows.map((row) => {
+          {visible.map((row) => {
             const delta = row.rank_before - row.rank_after
+            const chunk = chunkMap.get(row.chunk_id)
+            const text = chunk?.text_preview || chunk?.text || ''
             return (
-              <div key={row.chunk_id} className="flex items-center gap-2 text-[10px] font-mono text-gray-500">
-                <span className="text-gray-600">{row.chunk_id.slice(0, 8)}</span>
-                <span>{row.rank_before} → {row.rank_after}</span>
-                <span className={clsx(delta > 0 && 'text-emerald-400', delta < 0 && 'text-red-400')}>
-                  {delta > 0 ? `↑${delta}` : delta < 0 ? `↓${-delta}` : '—'}
-                </span>
-                <span className="text-gray-600">{fmt(row.score_before, 4)} → {fmt(row.score_after, 4)}</span>
+              <div
+                key={row.chunk_id}
+                className="rounded-lg border border-white/[0.05] bg-white/[0.015] px-2 py-1.5"
+              >
+                <div className="flex items-center gap-2 text-[10px] font-mono">
+                  <span className="w-6 shrink-0 text-gray-500">#{row.rank_after}</span>
+                  <span
+                    className={clsx(
+                      'w-8 shrink-0',
+                      delta > 0 && 'text-emerald-400',
+                      delta < 0 && 'text-red-400',
+                      delta === 0 && 'text-gray-700',
+                    )}
+                  >
+                    {delta > 0 ? `↑${delta}` : delta < 0 ? `↓${-delta}` : '—'}
+                  </span>
+                  <span className="shrink-0 text-gray-600">
+                    {row.rank_before} → {row.rank_after}
+                  </span>
+                  <span className="shrink-0 text-gray-600">
+                    {fmt(row.score_before, 3)} → {fmt(row.score_after, 3)}
+                  </span>
+                  <span className="flex-1" />
+                  <span className="max-w-[45%] truncate text-gray-600">
+                    {chunk?.source_doc || row.chunk_id.slice(0, 8)}
+                    {chunk?.page_num ? ` p.${chunk.page_num}` : ''}
+                  </span>
+                </div>
+                {text && (
+                  <div className="mt-0.5 text-[11px] leading-relaxed text-gray-500 break-words">
+                    {text.length > 110 ? `${text.slice(0, 110)}…` : text}
+                  </div>
+                )}
               </div>
             )
           })}
+          {rows.length > 10 && (
+            <button
+              type="button"
+              onClick={() => setShowAll((v) => !v)}
+              className="text-[10px] text-brand-light/70 hover:text-brand-light"
+            >
+              {showAll ? '收起' : `展开其余 ${rows.length - 10} 条`}
+            </button>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-function GenerationView({ data }: { data?: GenerationSection }) {
-  if (!data) return <p className="text-[11px] text-gray-600">未开启生成层或无数据</p>
+function GenerationView({ data, layers }: { data?: GenerationSection; layers: string[] }) {
+  if (!data) return <LayerHint layer="generation" layers={layers} />
   const params = data.params || {}
   const chunks = data.context_chunks || []
   const citations = data.citations || []
@@ -580,12 +683,19 @@ export function TraceDetail({ trace, onChanged }: { trace: TraceDetailData; onCh
         <RetrievalView data={trace.retrieval} />
       </Panel>
 
-      <Panel title="重排 Rerank">
-        <RerankView data={trace.rerank} />
+      <Panel
+        title="重排 Rerank"
+        extra={<LayerBadge on={trace.layers.includes('rerank')} />}
+      >
+        <RerankView trace={trace} />
       </Panel>
 
-      <Panel title="生成 / Prompt" defaultOpen={false}>
-        <GenerationView data={trace.generation} />
+      <Panel
+        title="生成 / Prompt"
+        defaultOpen={false}
+        extra={<LayerBadge on={trace.layers.includes('generation')} />}
+      >
+        <GenerationView data={trace.generation} layers={trace.layers} />
       </Panel>
 
       <Panel title="质量评估 / 坏 case 标注" defaultOpen={false}>

@@ -106,7 +106,10 @@ export interface RetrievalSection {
 
 export interface RerankSection {
   enabled?: boolean
+  /** applied | skipped | disabled | unavailable | cooldown | failed */
   status?: string
+  /** 未执行重排时的原因说明 */
+  reason?: string
   backend?: string
   model?: string
   candidates?: number

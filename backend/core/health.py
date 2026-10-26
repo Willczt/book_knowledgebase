@@ -99,15 +99,3 @@ async def check_deepseek(timeout: float = 5.0) -> dict:
         "supports_vision": bool(model and "image" in (model.get("input_modalities") or [])),
     }
 
-
-async def check_ark(timeout: float = 3.0) -> dict:
-    """豆包（火山 Ark）配置状态：只校验配置，不做额外请求"""
-    if not settings.ark_api_key:
-        return {"ok": False, "configured": False, "error": "未配置 ARK_API_KEY"}
-    return {
-        "ok": True,
-        "configured": True,
-        "url": settings.ark_base_url,
-        "model": settings.doubao_chat_model,
-        "note": "已配置（未做在线校验）",
-    }

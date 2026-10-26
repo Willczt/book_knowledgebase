@@ -41,12 +41,12 @@ class Reranker(Protocol):
         query_text: str,
         results: list[SearchResult],
         top_k: Optional[int] = None,
-        trace: Optional["QueryTrace"] = None,
+        trace: Optional[QueryTrace] = None,
     ) -> list[SearchResult]: ...
 
 
 def _record_rerank(
-    trace: Optional["QueryTrace"],
+    trace: Optional[QueryTrace],
     *,
     backend: str,
     model: str,
@@ -56,11 +56,13 @@ def _record_rerank(
     scores: Optional[list[float]] = None,
     duration_ms: int = 0,
     error: Optional[str] = None,
+    reason: Optional[str] = None,
 ) -> None:
     """把一次重排的输入/输出顺序与分数写入 trace。"""
     if trace is None or not trace.on("rerank"):
         return
     data: dict[str, Any] = {
+        # 只有真正完成重排才算「启用了重排」，failed/cooldown/skipped 都为 False
         "enabled": status == "applied",
         "status": status,
         "backend": backend,
@@ -69,6 +71,10 @@ def _record_rerank(
         "duration_ms": duration_ms,
         "order_before": [r.chunk_id for r in results],
     }
+    if reason:
+        # 未重排时必须说明原因，否则前端只能显示「未触发重排」，无法区分
+        # 「本请求关了重排」「候选不足」「服务不可用」三种情况
+        data["reason"] = reason
     if order is not None:
         data["order_after"] = [results[i].chunk_id for i in order]
     if scores is not None and order is not None:
@@ -88,6 +94,31 @@ def _record_rerank(
     if error:
         data["error"] = error
     trace.update("rerank", data)
+
+
+def record_rerank_skip(
+    trace: Optional[QueryTrace],
+    *,
+    backend: str,
+    model: str,
+    results: list[SearchResult],
+    status: str,
+    reason: str,
+) -> None:
+    """记录「本次没有执行重排」的原因。
+
+    retriever 在关闭重排 / 候选不足 / 未构建 reranker 时根本不会调用 rerank()，
+    若不在这里补一条记录，trace 的 rerank 段会整段缺失，前端只能提示
+    「未开启重排层或未触发重排」——把「配置关了」和「服务挂了」混为一谈。
+    """
+    _record_rerank(
+        trace,
+        backend=backend,
+        model=model,
+        results=results,
+        status=status,
+        reason=reason,
+    )
 
 
 def _parse_rerank_scores(body: Any, expected: int) -> list[float]:
@@ -137,7 +168,7 @@ class HttpReranker:
         query_text: str,
         results: list[SearchResult],
         top_k: Optional[int] = None,
-        trace: Optional["QueryTrace"] = None,
+        trace: Optional[QueryTrace] = None,
     ) -> list[SearchResult]:
         if len(results) < 2:
             _record_rerank(
@@ -156,6 +187,7 @@ class HttpReranker:
                 results=results,
                 status="cooldown",
                 error="rerank 服务处于失败冷却期",
+                reason="上次重排请求失败，冷却期内直接沿用融合分排序",
             )
             return results[:top_k] if top_k else results
 
@@ -178,6 +210,7 @@ class HttpReranker:
                 status="failed",
                 duration_ms=int((time.perf_counter() - started) * 1000),
                 error=f"{type(exc).__name__}: {exc}"[:300],
+                reason="重排服务调用失败，已回退到融合分排序；检查 RERANK_BASE_URL 指向的服务是否可用",
             )
             return results[:top_k] if top_k else results
 
@@ -279,7 +312,7 @@ class FlashRankReranker:
         query_text: str,
         results: list[SearchResult],
         top_k: Optional[int] = None,
-        trace: Optional["QueryTrace"] = None,
+        trace: Optional[QueryTrace] = None,
     ) -> list[SearchResult]:
         if len(results) < 2:
             _record_rerank(

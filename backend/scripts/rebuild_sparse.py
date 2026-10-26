@@ -64,7 +64,7 @@ async def rebuild_collection(store: QdrantVectorStore, collection: str, dry_run:
         vectors = embed_sparse(texts)
 
         payload: list[PointVectors] = []
-        for point, (indices, values) in zip(points, vectors):
+        for point, (indices, values) in zip(points, vectors, strict=True):
             scanned += 1
             if not indices:
                 skipped += 1

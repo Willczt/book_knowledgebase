@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -93,6 +94,15 @@ class Document(Base):
     processing_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     processing_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    # 任务队列字段：DB 即队列，进程重启/多 worker 都能靠租约恢复
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    lease_until: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+    __table_args__ = (
+        Index("ix_documents_queue", "status", "next_retry_at"),
+    )
 
     knowledge_base: Mapped[KnowledgeBase] = relationship("KnowledgeBase", back_populates="documents")
 

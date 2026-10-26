@@ -14,8 +14,7 @@ from db import crud
 from db.models import KnowledgeBase
 from db.schemas import DocumentResponse, DocumentStatusResponse
 from tasks import progress as ingest_progress
-from tasks.background import spawn
-from tasks.ingest_task import run_ingest_task
+from tasks.worker import get_worker
 from vector_store.qdrant_store import QdrantVectorStore
 
 router = APIRouter(prefix="/knowledge-bases", tags=["Documents"])
@@ -77,21 +76,8 @@ async def upload_document(
         "status": "pending",
     })
 
-    # 启动后台摄入任务（经 spawn 持有引用，避免任务被 GC 回收）
-    spawn(
-        run_ingest_task(
-            doc_id=doc_id,
-            file_path=str(file_path),
-            source_doc=file.filename or doc_id,
-            kb_id=kb.id,
-            kb_embedding_provider=kb.embedding_provider,
-            kb_embedding_model_id=kb.embedding_model_id,
-            kb_embedding_vector_dim=kb.embedding_vector_dim,
-            kb_qdrant_collection=kb.qdrant_collection_name,
-            caption_provider=kb.caption_provider,
-            caption_model_id=kb.caption_model_id,
-        )
-    )
+    # 投递到 DB 队列：进程重启后任务仍然存在，worker 数受 INGEST_WORKERS 限制
+    get_worker().notify()
 
     return doc
 
@@ -122,22 +108,13 @@ async def reindex_document(
         "image_count": 0,
         "processing_started_at": None,
         "processing_completed_at": None,
+        # 手动重建索引视为一次全新的任务：重置重试计数与退避时间
+        "attempts": 0,
+        "next_retry_at": None,
+        "lease_until": None,
     })
 
-    spawn(
-        run_ingest_task(
-            doc_id=doc.id,
-            file_path=doc.file_path,
-            source_doc=doc.filename,
-            kb_id=kb.id,
-            kb_embedding_provider=kb.embedding_provider,
-            kb_embedding_model_id=kb.embedding_model_id,
-            kb_embedding_vector_dim=kb.embedding_vector_dim,
-            kb_qdrant_collection=kb.qdrant_collection_name,
-            caption_provider=kb.caption_provider,
-            caption_model_id=kb.caption_model_id,
-        )
-    )
+    get_worker().notify()
     return doc
 
 

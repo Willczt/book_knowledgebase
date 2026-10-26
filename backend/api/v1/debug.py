@@ -131,7 +131,7 @@ def _ranked_chunk_ids(trace: dict) -> list[str]:
     if included:
         included.sort(key=lambda row: row.get("final_rank") or 10**6)
         return [row.get("chunk_id") for row in included if row.get("chunk_id")]
-    return list(((trace.get("rerank") or {}).get("order_after") or []))
+    return list((trace.get("rerank") or {}).get("order_after") or [])
 
 
 @router.get("/traces/{trace_id}/export")
