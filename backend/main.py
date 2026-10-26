@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -28,14 +29,53 @@ async def lifespan(_app: FastAPI):
     for subdir in ["docs", "images"]:
         Path(settings.storage_root, subdir).mkdir(parents=True, exist_ok=True)
 
+    # 可选：顺带拉起 vLLM rerank 服务（后台任务，不阻塞 API 启动）
+    autostart: asyncio.Task | None = None
+    if settings.rerank_enabled and settings.rerank_autostart:
+        autostart = asyncio.create_task(_autostart_rerank())
+
     logger.info("application_started", storage_root=settings.storage_root)
     yield
+
+    if autostart is not None:
+        autostart.cancel()
+        try:
+            await autostart
+        except (asyncio.CancelledError, Exception):
+            pass
+        await _stop_rerank()
 
     # 关闭共享的 Qdrant 连接池
     from api.deps import close_qdrant
 
     await close_qdrant()
     logger.info("application_shutdown")
+
+
+async def _autostart_rerank() -> None:
+    from core.rerank_server import RerankServerError, get_server
+
+    try:
+        state = await get_server().start(wait=False)
+        logger.info(
+            "rerank_autostart",
+            message=state.get("message"),
+            pid=state.get("pid"),
+        )
+    except RerankServerError as exc:
+        logger.warning("rerank_autostart_failed", error=str(exc))
+    except Exception as exc:  # 自启失败不影响主服务
+        logger.warning("rerank_autostart_failed", error=str(exc)[:200])
+
+
+async def _stop_rerank() -> None:
+    from core.rerank_server import get_server
+
+    try:
+        state = await get_server().stop()
+        logger.info("rerank_autostop", message=state.get("message"))
+    except Exception as exc:
+        logger.warning("rerank_autostop_failed", error=str(exc)[:200])
 
 
 async def _cleanup_stale_documents() -> None:

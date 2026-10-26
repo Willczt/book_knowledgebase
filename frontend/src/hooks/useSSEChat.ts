@@ -1,5 +1,5 @@
 import { useRef, useCallback } from 'react'
-import type { SourceChunk } from '../types/api'
+import type { ChatRequest, SourceChunk } from '../types/api'
 
 interface UseSSEChatOptions {
   onToken: (token: string) => void
@@ -18,6 +18,7 @@ export function useSSEChat() {
       content: string,
       image: string | undefined,
       options: UseSSEChatOptions,
+      retrievalConfig?: ChatRequest['retrieval_config'],
     ) => {
       if (abortRef.current) {
         abortRef.current.abort()
@@ -31,6 +32,7 @@ export function useSSEChat() {
           body: JSON.stringify({
             content,
             image: image || undefined,
+            retrieval_config: retrievalConfig,
           }),
           signal: abortRef.current.signal,
         })

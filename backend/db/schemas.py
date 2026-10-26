@@ -163,7 +163,8 @@ class MessageResponse(BaseModel):
 class RetrievalConfig(BaseModel):
     top_k: int = Field(default=8, ge=1, le=50)
     score_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
-    use_reranker: bool = False
+    # None = 跟随服务端全局开关（RERANK_ENABLED，默认开启）
+    use_reranker: Optional[bool] = None
 
 
 class ChatRequest(BaseModel):
@@ -199,7 +200,8 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
     image: Optional[str] = None
     top_k: int = Field(default=8, ge=1, le=50)
-    use_reranker: bool = False
+    # None = 跟随服务端全局开关（RERANK_ENABLED，默认开启）
+    use_reranker: Optional[bool] = None
 
 
 class SearchResponse(BaseModel):

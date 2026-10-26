@@ -36,7 +36,11 @@ async def search(
         raise HTTPException(status_code=409, detail=str(e))
 
     query_image = decode_base64_image(body.image)
-    reranker = get_reranker() if body.use_reranker else None
+    # 未显式指定时跟随全局开关（RERANK_ENABLED，默认开启）
+    use_reranker = (
+        body.use_reranker if body.use_reranker is not None else settings.rerank_enabled
+    )
+    reranker = get_reranker() if use_reranker else None
     retriever = HybridRetriever(
         vector_store=qdrant,
         embedding_provider=embedding_provider,
@@ -56,7 +60,8 @@ async def search(
             SourceChunk(
                 chunk_id=r.chunk_id,
                 text=r.text,
-                score=round(r.score, 4),
+                # 开了重排就用 rerank 分展示，顺序与百分比才一致
+                score=round(r.rerank_score if r.rerank_score is not None else r.score, 4),
                 source_doc=r.source_doc,
                 doc_id=r.doc_id,
                 page_num=r.page_num,

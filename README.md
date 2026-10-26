@@ -232,11 +232,43 @@ book-rag chat --kb-id <id> --provider doubao --model doubao-seed-1-6-250715
 | `DEFAULT_TOP_K` | `8` | 对话默认召回 chunk 数（请求里传 `top_k` 可覆盖）|
 | `CONTEXT_HISTORY_TURNS` | `10` | 对话携带的历史轮数 |
 | `MAX_IMAGE_DIMENSION` | `1024` | 图片入库前的最大边长，超过才缩放 |
+| `RERANK_ENABLED` | `true` | 是否默认开启重排；请求里传 `use_reranker` 可覆盖（前端输入框的「重排」按钮即按请求切换）|
+| `RERANK_BACKEND` | `http` | `http` = vLLM 的 `/v1/rerank`；`flashrank` = 本地 ONNX 模型 |
+| `RERANK_BASE_URL` | `http://localhost:8100/v1` | rerank 服务地址，端口就是 vLLM 监听端口 |
+| `RERANK_API_KEY` | - | rerank 服务鉴权（vLLM 默认不需要）|
+| `RERANK_MODEL` | `BAAI/bge-reranker-v2-m3` | rerank 模型名 |
+| `RERANK_CANDIDATES` | `30` | 参与精排的候选数，应不小于 `top_k` |
+| `RERANK_TIMEOUT` | `30` | rerank 请求超时（秒），失败自动回退原顺序 |
+| `RERANK_LOCAL_MODEL` | `ms-marco-MiniLM-L-6-v2` | `flashrank` 后端的本地模型 |
+| `RERANK_AUTOSTART` | `false` | 后端启动时是否顺带拉起 vLLM（`--reload` 开发模式不建议开）|
+| `RERANK_SERVER_BIN` | `vllm` | vLLM 可执行文件，可填绝对路径 |
+| `RERANK_SERVER_BIND` | `0.0.0.0` | vLLM 监听地址 |
+| `RERANK_SERVER_EXTRA_ARGS` | `--gpu-memory-utilization 0.3 --max-model-len 2048` | 追加给 `vllm serve` 的参数 |
+| `RERANK_START_TIMEOUT` | `600` | 启动后等待健康检查的最长秒数 |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | 允许的前端来源，逗号分隔 |
 
 说明：
 
-- **重排（reranker）与 `top_k` 是请求级参数**，不走环境变量：检索接口传 `use_reranker` / `top_k`，对话接口在会话的检索配置里传。
+- **重排开关与 `top_k` 可被请求覆盖**：全局默认由 `RERANK_ENABLED` / `DEFAULT_TOP_K` 决定，检索接口可传 `use_reranker` / `top_k`，对话接口在 `retrieval_config` 里传。前端输入框右下角的「重排」按钮默认开启，点击即按请求关闭。
+- rerank 服务不可用时只会在日志里打一条 `rerank_failed`（60 秒内不再重试），检索自动回退到 RRF 顺序，不影响问答。
+
+#### rerank 服务（vLLM）生命周期
+
+vLLM 由本项目管理：同一份配置、同一个 PID 文件与日志，三种入口行为一致。
+
+```bash
+make rerank-up        # 启动并等待健康检查
+make rerank-status    # 运行状态 + 健康探针 + PID（也能发现手工启动的实例）
+make rerank-logs      # 日志尾部
+make rerank-down      # 停止（手工启动的实例也会被接管停止）
+```
+
+- 不依赖后端服务，直接调模块：`cd backend && python -m core.rerank_server up|down|status|logs`
+- HTTP：`GET /api/v1/rerank`、`POST /api/v1/rerank/start|stop|restart`、`GET /api/v1/rerank/logs`
+- CLI：`bookrag rerank status|up|down|restart|logs`
+- `RERANK_AUTOSTART=true` 时后端启动会顺带拉起它、退出时停止；`--reload` 开发模式不建议开（每次热重载都会重启模型）
+- PID / 日志：`storage/run/rerank-server.pid`、`storage/logs/rerank-server.log`
+- 端口取自 `RERANK_BASE_URL`；WSL mirrored 网络下 `127.0.0.1` 的转发可能不可用（表现为连接被拒），此时把 host 写成本机 IP（`hostname -I` 查看），并相应调 `--host` 绑定值
 - 生效优先级：进程环境变量 > 当前目录 `.env` > 仓库根 `.env` > 代码默认值。
 - 配置在进程启动时读取一次（`get_settings()` 带 `lru_cache`），改完 `.env` **必须重启后端**；`--reload` 只监听代码变更，不会重载 `.env`。
 

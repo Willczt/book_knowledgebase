@@ -19,6 +19,8 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
   const [isStreaming, setIsStreaming] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  // rerank 重排开关：默认开启，用户可在输入框上一键关闭
+  const [rerankEnabled, setRerankEnabled] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sendingRef = useRef(false)
   // 加载更早消息时保持视口位置，不要让页面跳到底部
@@ -144,6 +146,8 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
         })
         finalize()
       },
+    }, {
+      use_reranker: rerankEnabled,
     })
 
     finalize()
@@ -228,7 +232,12 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
 
       {/* Input */}
       <div className="composer-dock shrink-0 max-w-3xl mx-auto w-full">
-        <ChatInput onSend={handleSend} disabled={isStreaming} />
+        <ChatInput
+          onSend={handleSend}
+          disabled={isStreaming}
+          rerankEnabled={rerankEnabled}
+          onToggleRerank={() => setRerankEnabled((v) => !v)}
+        />
       </div>
     </div>
   )

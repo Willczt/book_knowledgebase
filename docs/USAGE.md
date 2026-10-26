@@ -207,7 +207,47 @@ DATABASE_URL=postgresql+asyncpg://bookrag:bookrag@localhost:5432/bookrag
 | `CHUNK_OVERLAP` | `64` | 相邻 chunk 的重叠字符数，避免语义在块边界断裂 |
 | `MAX_IMAGE_DIMENSION` | `1024` | 提取图片的最大边长（像素），超出则自动缩放 |
 
-### 2.9 CORS 配置
+### 2.9 Rerank 重排
+
+重排默认开启，检索时先召回 `RERANK_CANDIDATES` 条候选，再用 rerank 模型精排并截断到 `top_k`。
+前端输入框的「重排」按钮可按请求关闭。
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `RERANK_ENABLED` | `true` | 全局默认开关；请求里的 `use_reranker` 优先 |
+| `RERANK_BACKEND` | `http` | `http` = vLLM `/v1/rerank`；`flashrank` = 本地 ONNX |
+| `RERANK_BASE_URL` | `http://localhost:8100/v1` | rerank 服务地址（端口即 vLLM 监听端口）|
+| `RERANK_MODEL` | `BAAI/bge-reranker-v2-m3` | rerank 模型名 |
+| `RERANK_CANDIDATES` | `30` | 参与精排的候选数（应不小于 `top_k`）|
+| `RERANK_TIMEOUT` | `30` | rerank 请求超时（秒）|
+| `RERANK_LOCAL_MODEL` | `ms-marco-MiniLM-L-6-v2` | `flashrank` 后端的本地模型 |
+| `RERANK_AUTOSTART` | `false` | 后端启动时是否顺带拉起 vLLM（`--reload` 开发模式不建议开）|
+| `RERANK_SERVER_BIN` | `vllm` | vLLM 可执行文件，可填绝对路径 |
+| `RERANK_SERVER_BIND` | `0.0.0.0` | vLLM 监听地址（WSL 下绑 127.0.0.1 可能连不上）|
+| `RERANK_SERVER_EXTRA_ARGS` | `--gpu-memory-utilization 0.3 --max-model-len 2048` | 追加给 `vllm serve` 的参数 |
+| `RERANK_START_TIMEOUT` | `600` | 启动后等待健康检查的最长秒数 |
+
+#### 服务生命周期
+
+vLLM 由本项目统一管理（PID 与日志在 `storage/run/`、`storage/logs/`）：
+
+```bash
+make rerank-up        # 启动并等待健康
+make rerank-status    # 状态 + 健康探针 + PID
+make rerank-logs      # 日志尾部
+make rerank-down      # 停止
+```
+
+也可用 `cd backend && python -m core.rerank_server up|down|status|logs`，
+或 HTTP 接口 `/api/v1/rerank`（`start` / `stop` / `restart` / `logs`）。
+
+> WSL 注意：mirrored 网络下 `127.0.0.1` 的端口转发可能不稳定（连接被拒），
+> 但本机网卡 IP 可用。此时把 `RERANK_BASE_URL` 改成 `http://<本机IP>:8100/v1`
+> （`hostname -I` 查看），换网络后需同步更新。
+
+rerank 服务不可用时自动回退到 RRF 顺序，并在日志里打 `rerank_failed`，不影响问答。
+
+### 2.10 CORS 配置
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
@@ -1210,7 +1250,7 @@ python cli/main.py ingest ./book.pdf --kb-id xxx
    CHUNK_OVERLAP=100
    ```
 
-2. **未开启 Reranker**：在检索配置中启用 CrossEncoder Reranker 可显著提升精度
+2. **Reranker 未生效**：重排默认开启，但若 rerank 服务未启动（日志里有 `rerank_failed`）会自动回退，等于没开；检查 `RERANK_BASE_URL` 与 vLLM 服务
 
 3. **Top-K 过小**：增大 `DEFAULT_TOP_K` 至 10-15
 

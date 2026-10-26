@@ -126,7 +126,7 @@ class RAGPipeline:
         query_image: Optional[bytes] = None,
         top_k: int = 8,
         score_threshold: float = 0.0,
-        use_reranker: bool = False,  # noqa: ARG002
+        use_reranker: Optional[bool] = None,
     ) -> list[SearchResult]:
         query = await self._retriever.build_query(
             query_text=query_text,
@@ -137,6 +137,7 @@ class RAGPipeline:
         return await self._retriever.retrieve(
             collection_name=self._kb.qdrant_collection_name,
             query=query,
+            use_reranker=use_reranker,
         )
 
     async def stream_chat(
@@ -146,7 +147,7 @@ class RAGPipeline:
         query_image: Optional[bytes] = None,
         top_k: int = 8,
         score_threshold: float = 0.0,
-        use_reranker: bool = False,
+        use_reranker: Optional[bool] = None,
     ) -> AsyncIterator[dict]:
         """
         SSE 流式问答生成器。
@@ -215,7 +216,8 @@ class RAGPipeline:
             SourceChunk(
                 chunk_id=r.chunk_id,
                 text=r.text[:300],  # 截断避免响应过大
-                score=round(r.score, 4),
+                # 开了重排就用 rerank 分展示，顺序与百分比才一致
+                score=round(r.rerank_score if r.rerank_score is not None else r.score, 4),
                 source_doc=r.source_doc,
                 doc_id=r.doc_id,
                 page_num=r.page_num,

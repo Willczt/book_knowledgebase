@@ -1,4 +1,5 @@
-.PHONY: dev dev-qdrant install install-frontend lint test check format migrate
+.PHONY: dev dev-qdrant install install-frontend lint test check format migrate \
+	rerank-up rerank-down rerank-status rerank-logs
 
 # 优先使用项目内 venv，否则回退系统 python3
 PY := $(wildcard $(CURDIR)/.venv/bin/python)
@@ -81,3 +82,19 @@ logs-backend:
 # 批量摄入文档
 ingest:
 	python -m cli.main ingest $(path) --kb-id $(kb)
+
+# ============================
+# rerank 服务（vLLM）生命周期
+# 不依赖后端服务，直接管理子进程（PID / 日志在 storage/ 下）
+# ============================
+rerank-up:
+	cd backend && $(PY) -m core.rerank_server up
+
+rerank-down:
+	cd backend && $(PY) -m core.rerank_server down
+
+rerank-status:
+	cd backend && $(PY) -m core.rerank_server status
+
+rerank-logs:
+	cd backend && $(PY) -m core.rerank_server logs -n 100

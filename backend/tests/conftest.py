@@ -20,10 +20,14 @@ from db.models import Base  # noqa: E402
 
 
 class FakeQdrant:
-    """只实现导入导出用到的方法"""
+    """只实现导入导出 / 检索用到的少数方法"""
 
     def __init__(self) -> None:
         self.collections: dict[str, list[dict]] = {}
+        # 检索测试用：collection -> 预置的 SearchResult 列表
+        self.results: dict[str, list] = {}
+        # 最近一次 hybrid_search 的入参，便于断言候选池大小
+        self.last_search: dict = {}
 
     async def create_collection(self, name: str, dim: int) -> None:
         self.collections.setdefault(name, [])
@@ -44,6 +48,24 @@ class FakeQdrant:
 
     async def count(self, name: str) -> int:
         return len(self.collections.get(name, []))
+
+    async def hybrid_search(
+        self,
+        collection_name: str,
+        dense_vector: list[float],
+        sparse_indices: list[int],
+        sparse_values: list[float],
+        top_k: int = 10,
+        prefetch_limit: int = 20,
+        doc_ids_filter: list[str] | None = None,
+    ) -> list:
+        self.last_search = {
+            "collection": collection_name,
+            "top_k": top_k,
+            "prefetch_limit": prefetch_limit,
+            "doc_ids_filter": doc_ids_filter,
+        }
+        return list(self.results.get(collection_name, []))[:top_k]
 
 
 @pytest.fixture

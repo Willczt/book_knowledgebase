@@ -63,10 +63,15 @@ async def stream_chat(
         model_id=session.llm_model_id,
         llm_config=session.llm_config,
     )
-    retrieval_cfg = body.retrieval_config or {}
-    top_k = getattr(retrieval_cfg, "top_k", settings.default_top_k)
-    score_threshold = getattr(retrieval_cfg, "score_threshold", 0.0)
-    use_reranker = getattr(retrieval_cfg, "use_reranker", False)
+    retrieval_cfg = body.retrieval_config
+    top_k = retrieval_cfg.top_k if retrieval_cfg else settings.default_top_k
+    score_threshold = retrieval_cfg.score_threshold if retrieval_cfg else 0.0
+    # 请求里没显式指定时跟随全局开关（RERANK_ENABLED，默认开启）
+    use_reranker = (
+        retrieval_cfg.use_reranker
+        if retrieval_cfg and retrieval_cfg.use_reranker is not None
+        else settings.rerank_enabled
+    )
 
     reranker = get_reranker() if use_reranker else None
     retriever = HybridRetriever(

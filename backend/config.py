@@ -88,6 +88,32 @@ class Settings(BaseSettings):
     query_rewrite: str = "llm"
     query_rewrite_max_tokens: int = 2048
 
+    # Rerank（检索结果二次排序）
+    # 默认开启：召回 rerank_candidates 条候选，用 rerank 模型精排后截断到 top_k
+    rerank_enabled: bool = True
+    # http = vLLM cross-encoder 的 /v1/rerank 接口；flashrank = 本地 ONNX 模型
+    rerank_backend: str = "http"
+    rerank_base_url: str = "http://localhost:8100/v1"
+    rerank_api_key: Optional[str] = None
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    # 参与精排的候选数（需 >= 最终 top_k，否则没有精排空间）
+    rerank_candidates: int = 30
+    rerank_timeout: float = 30.0
+    # flashrank 后端使用的本地模型
+    rerank_local_model: str = "ms-marco-MiniLM-L-6-v2"
+
+    # rerank 服务（vLLM）的生命周期：由 backend/core/rerank_server.py 统一管理
+    # 后端启动时是否顺带拉起 vLLM（--reload 开发模式不建议开，否则每次热重载都会重启它）
+    rerank_autostart: bool = False
+    # vllm 可执行文件：PATH 里的 vllm，或绝对路径（如 /home/will/llm/bin/vllm）
+    rerank_server_bin: str = "vllm"
+    # 监听地址：本机若存在 TUN/透明代理劫持 loopback，绑 127.0.0.1 会连不上
+    rerank_server_bind: str = "0.0.0.0"
+    # 追加给 `vllm serve` 的参数（按 shell 规则分词）
+    rerank_server_extra_args: str = "--gpu-memory-utilization 0.3 --max-model-len 2048"
+    # 启动后等待健康检查的最长秒数：WSL/冷启动下实测要 4~5 分钟才真正可用
+    rerank_start_timeout: float = 600.0
+
     # RAG 默认参数
     default_top_k: int = 8
     context_history_turns: int = 10

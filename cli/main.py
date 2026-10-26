@@ -24,7 +24,9 @@ from rich.table import Table
 
 app = typer.Typer(name="bookrag", help="电子书 RAG 知识库 CLI 工具", rich_markup_mode="rich")
 kb_app = typer.Typer(help="知识库管理")
+rerank_app = typer.Typer(help="rerank 服务（vLLM）生命周期管理")
 app.add_typer(kb_app, name="kb")
+app.add_typer(rerank_app, name="rerank")
 
 console = Console()
 
@@ -318,6 +320,82 @@ def chat(
             await _stream_chat(session_id, query)
 
     asyncio.run(_main())
+
+
+# ========================
+# Rerank 服务（vLLM）生命周期
+# ========================
+
+def _rerank_post(path: str, params: dict | None = None) -> dict:
+    async def _run():
+        async with get_client() as client:
+            resp = await client.post(f"/rerank{path}", params=params or {})
+            if resp.status_code >= 400:
+                detail = resp.json().get("detail", resp.text) if resp.content else resp.text
+                raise typer.BadParameter(detail)
+            return resp.json()
+
+    return asyncio.run(_run())
+
+
+@rerank_app.command("status")
+def rerank_status():
+    """查看 rerank 服务状态、健康检查与进程 PID"""
+    async def _run():
+        async with get_client() as client:
+            resp = await client.get("/rerank")
+            resp.raise_for_status()
+            return resp.json()
+
+    data = asyncio.run(_run())
+    table = Table(title="Rerank 服务")
+    table.add_column("项")
+    table.add_column("值")
+    table.add_row("运行状态", "[green]运行中[/green]" if data["running"] else "[red]未运行[/red]")
+    table.add_row("健康检查", "[green]正常[/green]" if data["healthy"] else "[yellow]不可用[/yellow]")
+    table.add_row("重排开关", "开启" if data["enabled"] else "关闭")
+    table.add_row("后端 / 模型", f"{data['backend']} / {data['model']}")
+    table.add_row("服务地址", data["base_url"])
+    table.add_row("进程 PID", str(data["pid"] or "-"))
+    table.add_row("后端自启", "开" if data["autostart"] else "关")
+    table.add_row("日志文件", data["log_path"])
+    console.print(table)
+
+
+@rerank_app.command("up")
+def rerank_up(wait: bool = typer.Option(False, "--wait", help="等待模型加载完成（可能数十秒）")):
+    """启动 vLLM rerank 服务"""
+    data = _rerank_post("/start", {"wait": wait})
+    console.print(f"[green]{data.get('message')}[/green]  pid={data.get('pid')}")
+
+
+@rerank_app.command("down")
+def rerank_down():
+    """停止 vLLM rerank 服务"""
+    data = _rerank_post("/stop")
+    console.print(f"[yellow]{data.get('message')}[/yellow]")
+
+
+@rerank_app.command("restart")
+def rerank_restart(wait: bool = typer.Option(False, "--wait", help="等待模型加载完成")):
+    """重启 vLLM rerank 服务"""
+    data = _rerank_post("/restart", {"wait": wait})
+    console.print(f"[green]{data.get('message')}[/green]  pid={data.get('pid')}")
+
+
+@rerank_app.command("logs")
+def rerank_logs(lines: int = typer.Option(80, "--lines", "-n", help="打印最后 N 行")):
+    """查看 rerank 服务日志尾部"""
+    async def _run():
+        async with get_client() as client:
+            resp = await client.get("/rerank/logs", params={"lines": lines})
+            resp.raise_for_status()
+            return resp.json()
+
+    data = asyncio.run(_run())
+    for line in data["lines"]:
+        console.print(line, markup=False, highlight=False)
+    console.print(f"[dim]{data['log_path']}[/dim]")
 
 
 if __name__ == "__main__":

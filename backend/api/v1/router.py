@@ -4,6 +4,7 @@ from api.v1.chat import router as chat_router
 from api.v1.config_routes import router as config_router
 from api.v1.documents import router as docs_router
 from api.v1.knowledge_base import router as kb_router
+from api.v1.rerank import router as rerank_router
 from api.v1.search import router as search_router
 from api.v1.sessions import router as sessions_router
 
@@ -15,3 +16,4 @@ api_router.include_router(sessions_router)
 api_router.include_router(chat_router)
 api_router.include_router(search_router)
 api_router.include_router(config_router)
+api_router.include_router(rerank_router)

@@ -66,12 +66,14 @@ def _dump_vector(vector: Any) -> dict:
 class SearchResult:
     chunk_id: str
     text: str
-    score: float
+    score: float                       # 融合（RRF）分，来自向量库
     source_doc: str
     doc_id: str
     chunk_type: str
     page_num: Optional[int] = None
     image_path: Optional[str] = None
+    # rerank 分（仅开启重排时有值）；score 保持融合分，展示时优先用这个
+    rerank_score: Optional[float] = None
 
 
 class QdrantVectorStore:

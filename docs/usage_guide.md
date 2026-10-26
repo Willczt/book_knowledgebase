@@ -1277,20 +1277,46 @@ DEFAULT_TOP_K=5   # 更精准，适合简单事实查询
 
 #### Reranker 配置
 
-CrossEncoder Reranker 在 RRF 融合后对 chunk 进行精排，可显著提升相关性：
+重排（rerank）在 RRF 融合之后对候选 chunk 精排，可显著提升相关性。**默认开启**，
+前端输入框右下角的「重排」按钮可以按请求关闭。
 
 ```env
-# 通常在 config.py 中控制，或通过代码开关
-# backend/core/retrieval/ 中的 CrossEncoderReranker 配置
+# .env
+RERANK_ENABLED=true                       # 全局默认开关
+RERANK_BACKEND=http                       # http = vLLM /v1/rerank；flashrank = 本地 ONNX
+RERANK_BASE_URL=http://localhost:8100/v1  # 端口即 vLLM 监听端口
+RERANK_MODEL=BAAI/bge-reranker-v2-m3
+RERANK_CANDIDATES=30                      # 参与精排的候选数（>= top_k）
+RERANK_TIMEOUT=30
+RERANK_AUTOSTART=false                    # 后端启动时是否顺带拉起 vLLM
 ```
+
+说明：
+
+- `rerank_candidates` 只有大于 `top_k` 才有意义：系统会按它放大召回池，精排后再截断到 `top_k`。
+- rerank 服务不可用时自动回退到 RRF 顺序（日志 `rerank_failed`，60 秒内不再重试），不影响问答。
+- 想完全本地化、不启 vLLM 时：`RERANK_BACKEND=flashrank`（模型由 `RERANK_LOCAL_MODEL` 指定，偏英文场景）。
+
+vLLM 由项目统一管理（不需要记 `vllm serve` 的一长串参数）：
+
+```bash
+make rerank-up        # 启动并等待健康检查
+make rerank-status    # 状态 / PID / 健康探针（也能发现手工启动的实例）
+make rerank-logs      # 日志尾部
+make rerank-down      # 停止
+```
+
+- 直接调模块：`cd backend && python -m core.rerank_server up|down|status|logs`
+- HTTP：`GET /api/v1/rerank`、`POST /api/v1/rerank/start|stop|restart`、`GET /api/v1/rerank/logs`
+- PID / 日志：`storage/run/rerank-server.pid`、`storage/logs/rerank-server.log`
+- WSL 提示：mirrored 网络下 `127.0.0.1` 转发可能不稳定，把 `RERANK_BASE_URL` 的 host 换成本机 IP 即可
 
 检索内部链路的参数（通过代码修改 `backend/core/retrieval/`）：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `prefetch_limit` | 50 | Qdrant 每路（Dense/Sparse）预取数量 |
+| `prefetch_limit` | `max(20, top_k * 2)` | Qdrant 每路（Dense/Sparse）预取数量 |
 | `rrf_rank_constant` | 60 | RRF 公式中的排名常数 k（标准值为 60） |
-| `reranker_model` | `ms-marco-MiniLM-L-12-v2` | FlashRank CrossEncoder 模型 |
 
 ### 12.3 会话历史配置
 
