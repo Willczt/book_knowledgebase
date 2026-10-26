@@ -31,6 +31,20 @@ export interface KnowledgeBaseUpdate {
   description?: string
 }
 
+export interface ExportJobStatus {
+  job_id: string
+  kb_id: string
+  kb_name: string
+  status: 'running' | 'done' | 'failed'
+  percent: number
+  stage: string
+  filename: string
+  error?: string | null
+  elapsed_s: number
+  download_ready: boolean
+  downloaded: boolean
+}
+
 export interface KnowledgeBaseImportResult {
   id: string
   name: string
@@ -158,14 +172,16 @@ export interface SourceChunk {
   image_path?: string
 }
 
+export interface RetrievalConfig {
+  top_k?: number
+  score_threshold?: number
+  use_reranker?: boolean
+}
+
 export interface ChatRequest {
   content: string
   image?: string
-  retrieval_config?: {
-    top_k?: number
-    score_threshold?: number
-    use_reranker?: boolean
-  }
+  retrieval_config?: RetrievalConfig
 }
 
 export interface EmbeddingModelInfo {

@@ -1,8 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Sidebar } from './components/layout/Sidebar'
 import { MainContent } from './components/layout/MainContent'
+import { DebugPanel } from './components/debug/DebugPanel'
+import { DebugErrorBoundary } from './components/debug/DebugErrorBoundary'
 
 export default function App() {
+  const [debugOpen, setDebugOpen] = useState(false)
   // 跟随鼠标的环境光：把坐标写进 CSS 变量，由 .cursor-glow 呈现
   useEffect(() => {
     if (window.matchMedia('(hover: none)').matches) return
@@ -38,8 +41,13 @@ export default function App() {
       <div className="top-light" aria-hidden="true" />
       <div className="app-grain" aria-hidden="true" />
 
-      <Sidebar />
+      <Sidebar onOpenDebug={() => setDebugOpen(true)} />
       <MainContent />
+      {debugOpen && (
+        <DebugErrorBoundary>
+          <DebugPanel onClose={() => setDebugOpen(false)} />
+        </DebugErrorBoundary>
+      )}
     </div>
   )
 }

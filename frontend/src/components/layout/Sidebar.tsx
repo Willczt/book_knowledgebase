@@ -1,9 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Trash2, Upload, Download, Pencil, X, ChevronDown, ChevronRight,
-  RefreshCw, RotateCcw, Database, BookOpen, MessageSquare, Sparkles,
+  RefreshCw, RotateCcw, Database, BookOpen, MessageSquare, Sparkles, Bug, Loader2,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -25,12 +25,27 @@ import type {
   Session,
 } from '../../types/api'
 
-export function Sidebar() {
+interface SidebarProps {
+  /** 打开 RAG 全链路调试面板 */
+  onOpenDebug?: () => void
+}
+
+interface ExportProgress {
+  kbId: string
+  kbName: string
+  jobId: string
+  percent: number
+  stage: string
+  status: 'running' | 'done' | 'failed'
+  error?: string
+}
+
+export function Sidebar({ onOpenDebug }: SidebarProps) {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [expandedKB, setExpandedKB] = useState<string | null>(null)
   const [editingKB, setEditingKB] = useState<{ id: string; value: string } | null>(null)
   const [editingSession, setEditingSession] = useState<{ id: string; value: string } | null>(null)
-  const [busyIds, setBusyIds] = useState<Record<string, boolean>>({})
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null)
   const kbImportRef = useRef<HTMLInputElement>(null)
   const sessionImportRef = useRef<HTMLInputElement>(null)
   const { kbs, setKBs, activeKB, setActiveKB, removeKB, updateKB } = useKBStore()
@@ -137,9 +152,6 @@ export function Sidebar() {
     queryClient.invalidateQueries({ queryKey: ['documents', kbId] })
   }
 
-  const markBusy = (key: string, value: boolean) =>
-    setBusyIds((prev) => ({ ...prev, [key]: value }))
-
   const handleRenameKB = async (kb: KnowledgeBase, value: string) => {
     setEditingKB(null)
     const name = value.trim()
@@ -166,17 +178,74 @@ export function Sidebar() {
   }
 
   const handleExportKB = async (kb: KnowledgeBase) => {
-    if (busyIds[kb.id]) return
-    markBusy(kb.id, true)
+    if (exportProgress?.status === 'running') return
     try {
-      const blob = await knowledgeBaseApi.exportArchive(kb.id)
-      downloadBlob(blob, `${kb.name}.kbz.zip`)
+      const job = await knowledgeBaseApi.startExportJob(kb.id)
+      setExportProgress({
+        kbId: kb.id,
+        kbName: kb.name,
+        jobId: job.job_id,
+        percent: job.percent,
+        stage: job.stage,
+        status: job.status,
+      })
     } catch (e) {
       alert(`导出失败：${(e as Error).message}`)
-    } finally {
-      markBusy(kb.id, false)
     }
   }
+
+  // 导出进度轮询：完成后自动下载，失败则停在卡片上展示原因
+  const exportJobId = exportProgress?.jobId
+  const exportKbId = exportProgress?.kbId
+  const exportStatus = exportProgress?.status
+  useEffect(() => {
+    if (!exportJobId || !exportKbId || exportStatus !== 'running') return
+    let cancelled = false
+    let timer: number | undefined
+
+    const tick = async () => {
+      try {
+        const status = await knowledgeBaseApi.exportJobStatus(exportKbId, exportJobId)
+        if (cancelled) return
+
+        if (status.status === 'failed') {
+          setExportProgress((prev) =>
+            prev
+              ? { ...prev, status: 'failed', percent: status.percent, error: status.error || '导出失败' }
+              : prev,
+          )
+          return
+        }
+
+        setExportProgress((prev) =>
+          prev ? { ...prev, percent: status.percent, stage: status.stage } : prev,
+        )
+
+        if (status.status === 'done') {
+          const blob = await knowledgeBaseApi.downloadExportJob(exportKbId, exportJobId)
+          if (cancelled) return
+          downloadBlob(blob, status.filename || `${status.kb_name}.kbz.zip`)
+          setExportProgress((prev) =>
+            prev ? { ...prev, status: 'done', percent: 100, stage: '下载已开始' } : prev,
+          )
+          return
+        }
+
+        timer = window.setTimeout(tick, 600)
+      } catch (e) {
+        if (cancelled) return
+        setExportProgress((prev) =>
+          prev ? { ...prev, status: 'failed', error: (e as Error).message } : prev,
+        )
+      }
+    }
+
+    timer = window.setTimeout(tick, 300)
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [exportJobId, exportKbId, exportStatus])
 
   const handleImportKB = async (file: File) => {
     try {
@@ -333,9 +402,14 @@ export function Sidebar() {
                 </button>
                 <button
                   onClick={() => handleExportKB(kb)}
-                  className={clsx('btn-icon p-1', busyIds[kb.id] && 'animate-pulse')}
+                  className={clsx(
+                    'btn-icon p-1',
+                    exportProgress?.kbId === kb.id &&
+                      exportProgress.status === 'running' &&
+                      'animate-pulse',
+                  )}
                   title="导出知识库（含向量库）"
-                  disabled={!!busyIds[kb.id]}
+                  disabled={exportProgress?.status === 'running'}
                 >
                   <Download size={10} />
                 </button>
@@ -579,7 +653,18 @@ export function Sidebar() {
         </div>
         <div className="flex items-center gap-2">
           <Sparkles size={11} className="text-brand/60" />
-          <span className="text-[10px] text-gray-600">Hybrid Search · BM25 + Dense · RRF</span>
+          <span className="text-[10px] text-gray-600 flex-1 truncate">
+            Hybrid Search · BM25 + Dense · RRF
+          </span>
+          <button
+            type="button"
+            onClick={onOpenDebug}
+            className="flex items-center gap-1 text-[10px] text-gray-600 hover:text-brand-light transition-colors"
+            title="RAG 全链路调试：分层观测、片段分数、Prompt、参数热调"
+          >
+            <Bug size={11} />
+            调试
+          </button>
         </div>
       </div>
 
@@ -587,6 +672,75 @@ export function Sidebar() {
       {showCreateModal &&
         createPortal(
           <CreateKBModal onClose={() => setShowCreateModal(false)} />,
+          document.body,
+        )}
+
+      {/* 导出进度：后台任务 + 轮询，避免点了没反应 */}
+      {exportProgress &&
+        createPortal(
+          <div className="fixed bottom-4 right-4 z-[80] w-[300px] rounded-2xl border border-white/[0.08] bg-surface-1 p-3.5 shadow-[0_24px_60px_-24px_#000] animate-slide-up">
+            <div className="flex items-center gap-2">
+              {exportProgress.status === 'running' ? (
+                <Loader2 size={13} className="text-brand-light animate-spin" />
+              ) : (
+                <Download
+                  size={13}
+                  className={exportProgress.status === 'failed' ? 'text-red-400' : 'text-emerald-400'}
+                />
+              )}
+              <span className="text-xs text-gray-200 flex-1 truncate">
+                导出「{exportProgress.kbName}」
+              </span>
+              {exportProgress.status !== 'running' && (
+                <button
+                  onClick={() => setExportProgress(null)}
+                  className="btn-icon p-0.5"
+                  title="关闭"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            <div className="mt-2.5 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+              <div
+                className={clsx(
+                  'h-full rounded-full transition-[width] duration-500 ease-out',
+                  exportProgress.status === 'failed'
+                    ? 'bg-red-500/70'
+                    : 'bg-gradient-to-r from-brand to-blue-500',
+                )}
+                style={{ width: `${Math.max(2, Math.min(100, exportProgress.percent))}%` }}
+              />
+            </div>
+
+            <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px]">
+              <span
+                className={clsx(
+                  'truncate',
+                  exportProgress.status === 'failed' ? 'text-red-300' : 'text-gray-500',
+                )}
+              >
+                {exportProgress.status === 'failed'
+                  ? exportProgress.error || '导出失败'
+                  : exportProgress.stage}
+              </span>
+              <span className="shrink-0 font-mono text-gray-600">
+                {Math.round(exportProgress.percent)}%
+              </span>
+            </div>
+
+            {exportProgress.status === 'running' && (
+              <p className="mt-1.5 text-[10px] text-gray-700">
+                向量库越大越慢，可以先做别的事，完成后自动开始下载
+              </p>
+            )}
+            {exportProgress.status === 'done' && (
+              <p className="mt-1.5 text-[10px] text-emerald-400/80">
+                下载已开始，请留意浏览器下载列表
+              </p>
+            )}
+          </div>,
           document.body,
         )}
     </aside>

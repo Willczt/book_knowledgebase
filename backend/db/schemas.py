@@ -165,6 +165,8 @@ class RetrievalConfig(BaseModel):
     score_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
     # None = 跟随服务端全局开关（RERANK_ENABLED，默认开启）
     use_reranker: Optional[bool] = None
+    # 精排候选池大小：调试时临时调大/调小，对比召回质量
+    rerank_candidates: Optional[int] = Field(default=None, ge=2, le=200)
 
 
 class ChatRequest(BaseModel):
@@ -200,13 +202,17 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
     image: Optional[str] = None
     top_k: int = Field(default=8, ge=1, le=50)
+    score_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
     # None = 跟随服务端全局开关（RERANK_ENABLED，默认开启）
     use_reranker: Optional[bool] = None
+    rerank_candidates: Optional[int] = Field(default=None, ge=2, le=200)
 
 
 class SearchResponse(BaseModel):
     results: list[SourceChunk]
     query: str
+    # 调试开启时返回，可用它拉取本次检索的完整 trace
+    trace_id: Optional[str] = None
 
 
 # ========================

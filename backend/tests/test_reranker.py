@@ -34,7 +34,7 @@ class _RecordingReranker:
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[str]]] = []
 
-    async def rerank(self, query_text, results, top_k=None):
+    async def rerank(self, query_text, results, top_k=None, trace=None):
         self.calls.append((query_text, [r.chunk_id for r in results]))
         ordered = list(reversed(results))
         return ordered[:top_k] if top_k else ordered

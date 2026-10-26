@@ -21,7 +21,7 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -209,17 +209,34 @@ async def _unique_kb_name(db: AsyncSession, base: str) -> str:
 # 导出：知识库
 # ========================
 
+# 导出进度回调：(阶段文案, 百分比 0-100)
+ProgressFn = Callable[[str, float], None]
+
+
+def _report(progress: Optional[ProgressFn], stage: str, percent: float) -> None:
+    """回调异常不影响导出本身。"""
+    if progress is None:
+        return
+    try:
+        progress(stage, percent)
+    except Exception:
+        pass
+
+
 async def export_kb(
     db: AsyncSession,
     kb: KnowledgeBase,
     qdrant: QdrantVectorStore,
     target: Optional[Path] = None,
+    progress: Optional[ProgressFn] = None,
 ) -> Any:
     """导出知识库为 zip。
 
     target 为文件路径时直接写入该文件（内存占用与库大小无关），返回统计信息；
     target 为 None 时返回 bytes（仅建议测试/小库使用）。
+    progress 用于上报阶段与百分比（后台导出任务使用）。
     """
+    _report(progress, "收集元数据", 2)
     docs = await crud.list_documents(db, kb.id)
     sessions = await crud.list_sessions(db, kb.id)
     images_root = _images_root()
@@ -257,6 +274,15 @@ async def export_kb(
         ],
     }
 
+    # 向量库通常占导出耗时的大头，先拿到总数才能给出有意义的百分比
+    total_points = 0
+    try:
+        collection = await qdrant.client.get_collection(kb.qdrant_collection_name)
+        total_points = int(collection.points_count or 0)
+    except Exception:
+        total_points = 0
+    _report(progress, "打包向量库", 5)
+
     sink = target if target is not None else io.BytesIO()
     with zipfile.ZipFile(sink, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         # 1) 向量库可能很大：从 Qdrant 边读边写，避免整库向量进内存
@@ -265,12 +291,21 @@ async def export_kb(
             async for point in qdrant.iter_points(kb.qdrant_collection_name):
                 entry.write(json.dumps(point, ensure_ascii=False).encode("utf-8") + b"\n")
                 vector_count += 1
+                if total_points and vector_count % 200 == 0:
+                    _report(
+                        progress,
+                        f"打包向量库 {vector_count}/{total_points}",
+                        5 + vector_count / total_points * 55,
+                    )
+        _report(progress, f"向量库完成（{vector_count} 条）", 60)
 
         # 2) 会话：一次只装载一个会话的消息，内存占用与「最大的那个会话」相关，
         #    而不是随全部历史消息线性增长
         message_images: set[str] = set()
         session_count = 0
         message_count = 0
+        total_sessions = max(1, len(sessions))
+        _report(progress, "打包历史会话", 60)
         with zf.open(SESSIONS_NAME, "w", force_zip64=True) as entry:
             for session in sessions:
                 messages = await crud.get_messages(
@@ -305,6 +340,11 @@ async def export_kb(
                     for rel in msg.image_paths or []:
                         if isinstance(rel, str):
                             message_images.add(rel)
+                _report(
+                    progress,
+                    f"打包历史会话 {session_count}/{len(sessions)}",
+                    60 + session_count / total_sessions * 15,
+                )
 
         # 3) manifest 放到最后写，此时统计信息才完整
         manifest["stats"] = {
@@ -314,8 +354,10 @@ async def export_kb(
             "vectors": vector_count,
         }
         _write_json(zf, MANIFEST_NAME, manifest)
+        _report(progress, "打包原始文档与图片", 80)
 
-        for doc in docs:
+        total_docs = max(1, len(docs))
+        for index, doc in enumerate(docs, start=1):
             path = Path(doc.file_path)
             if path.is_file():
                 _write_file(zf, f"files/docs/{doc.id}{path.suffix}", path)
@@ -325,6 +367,11 @@ async def export_kb(
                 for image in sorted(image_dir.iterdir()):
                     if image.is_file():
                         _write_file(zf, f"files/images/{doc.id}/{image.name}", image)
+            _report(
+                progress,
+                f"打包文档 {index}/{len(docs)}",
+                80 + index / total_docs * 18,
+            )
 
         for rel in sorted(message_images):
             source = (images_root / rel).resolve()
@@ -334,6 +381,8 @@ async def export_kb(
                 continue
             if source.is_file():
                 _write_file(zf, f"files/{rel}", source)
+
+    _report(progress, "完成", 100)
 
     # 写入文件时返回统计信息；传 None 时保持旧行为（返回 bytes，便于测试）
     if target is None:

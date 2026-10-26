@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.deps import decode_base64_image, get_kb_or_404, get_qdrant
 from config import get_settings
 from core.embedding.registry import get_embedding_registry
+from core.observability.trace import new_trace, record_trace
 from core.retrieval.reranker import get_reranker
 from core.retrieval.retriever import HybridRetriever
 from db.models import KnowledgeBase
@@ -47,15 +48,35 @@ async def search(
         reranker=reranker,
     )
 
+    # 调试模式开启时记录整条检索链路（关闭时 trace 为 None）
+    trace = new_trace(body.query, kind="search")
+    if trace is not None:
+        trace.update(
+            "query",
+            {
+                "original": body.query,
+                "kb_id": kb.id,
+                "kb_name": kb.name,
+                "mode": "search",
+                "rerank_backend": settings.rerank_backend if use_reranker else None,
+                "rerank_model": reranker.model_name if reranker is not None else None,
+            },
+        )
+
     query = await retriever.build_query(
         query_text=body.query,
         query_image=query_image,
         top_k=body.top_k,
+        score_threshold=body.score_threshold,
+        rerank_candidates=body.rerank_candidates,
+        trace=trace,
     )
-    results = await retriever.retrieve(kb.qdrant_collection_name, query)
+    results = await retriever.retrieve(kb.qdrant_collection_name, query, trace=trace)
+    trace_id = await record_trace(trace)
 
     return SearchResponse(
         query=body.query,
+        trace_id=trace_id,
         results=[
             SourceChunk(
                 chunk_id=r.chunk_id,

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { MessageBubble } from './MessageBubble'
 import { ChatInput } from './ChatInput'
+import { RETRIEVAL_DEFAULTS, type RetrievalOptions } from './RetrievalSettings'
 import { useSSEChat } from '../../hooks/useSSEChat'
 import { useSessionStore } from '../../stores/sessionStore'
 import { sessionsApi } from '../../api/sessions'
@@ -14,19 +15,53 @@ interface ChatWindowProps {
 // 首屏与「加载更早」共用的每页条数
 const PAGE_SIZE = 50
 
+// 检索参数存本地：刷新页面/切换会话后仍然生效
+const RETRIEVAL_KEY = 'bookkb.retrieval'
+
+const clampNumber = (value: unknown, min: number, max: number, fallback: number): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, value))
+}
+
+function loadRetrievalOptions(): RetrievalOptions {
+  try {
+    const raw = localStorage.getItem(RETRIEVAL_KEY)
+    if (!raw) return { ...RETRIEVAL_DEFAULTS }
+    const saved = JSON.parse(raw) as Partial<RetrievalOptions>
+    return {
+      top_k: Math.round(clampNumber(saved.top_k, 1, 50, RETRIEVAL_DEFAULTS.top_k)),
+      score_threshold: clampNumber(saved.score_threshold, 0, 1, RETRIEVAL_DEFAULTS.score_threshold),
+      use_reranker:
+        typeof saved.use_reranker === 'boolean'
+          ? saved.use_reranker
+          : RETRIEVAL_DEFAULTS.use_reranker,
+    }
+  } catch {
+    return { ...RETRIEVAL_DEFAULTS }
+  }
+}
+
 export function ChatWindow({ sessionId }: ChatWindowProps) {
   const { messages, setMessages, appendMessage, updateMessage } = useSessionStore()
   const [isStreaming, setIsStreaming] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
-  // rerank 重排开关：默认开启，用户可在输入框上一键关闭
-  const [rerankEnabled, setRerankEnabled] = useState(true)
+  // 检索参数（Top-K / 阈值 / rerank）：从本地恢复，改动后自动保存
+  const [retrieval, setRetrieval] = useState<RetrievalOptions>(loadRetrievalOptions)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sendingRef = useRef(false)
   // 加载更早消息时保持视口位置，不要让页面跳到底部
   const pendingPrependRef = useRef(false)
   const prevScrollHeightRef = useRef(0)
   const { sendMessage, abort } = useSSEChat()
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(RETRIEVAL_KEY, JSON.stringify(retrieval))
+    } catch {
+      // 隐私模式/配额不足时忽略，不影响提问
+    }
+  }, [retrieval])
 
   useEffect(() => {
     // 切换会话时中断正在进行的流式请求，防止旧 token 污染新会话
@@ -147,7 +182,9 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
         finalize()
       },
     }, {
-      use_reranker: rerankEnabled,
+      top_k: retrieval.top_k,
+      score_threshold: retrieval.score_threshold,
+      use_reranker: retrieval.use_reranker,
     })
 
     finalize()
@@ -235,8 +272,8 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
         <ChatInput
           onSend={handleSend}
           disabled={isStreaming}
-          rerankEnabled={rerankEnabled}
-          onToggleRerank={() => setRerankEnabled((v) => !v)}
+          retrieval={retrieval}
+          onRetrievalChange={setRetrieval}
         />
       </div>
     </div>

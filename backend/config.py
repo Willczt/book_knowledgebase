@@ -121,6 +121,15 @@ class Settings(BaseSettings):
     chunk_overlap: int = 64
     max_image_dimension: int = 1024
 
+    # RAG 调试模式（全链路追踪，默认关闭，关闭时几乎零开销）
+    debug_enabled: bool = False
+    # 分层开关：query,retrieval,rerank,generation,performance（逗号分隔，可只开其中几层）
+    debug_layers: str = "query,retrieval,rerank,generation,performance"
+    # 内存里保留最近多少条 trace
+    debug_max_traces: int = 100
+    # 是否把 trace 落盘到 storage/traces/*.json（用于离线回放/导出）
+    debug_persist: bool = True
+
     # CORS
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 

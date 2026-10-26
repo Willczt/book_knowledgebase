@@ -2,6 +2,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import structlog
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Distance,
@@ -10,6 +11,7 @@ from qdrant_client.models import (
     Fusion,
     FusionQuery,
     MatchValue,
+    Modifier,
     PointStruct,
     Prefetch,
     SparseIndexParams,
@@ -21,6 +23,7 @@ from qdrant_client.models import (
 from config import get_settings
 
 settings = get_settings()
+logger = structlog.get_logger()
 
 
 @dataclass
@@ -74,6 +77,8 @@ class SearchResult:
     image_path: Optional[str] = None
     # rerank 分（仅开启重排时有值）；score 保持融合分，展示时优先用这个
     rerank_score: Optional[float] = None
+    # 原始 payload 里的其余元数据（chunk_index / 章节标题 / 文档类型等，有什么记什么）
+    metadata: dict = field(default_factory=dict)
 
 
 class QdrantVectorStore:
@@ -94,7 +99,10 @@ class QdrantVectorStore:
         return self._client
 
     async def create_collection(self, collection_name: str, vector_dim: int) -> None:
-        """创建含 dense + sparse 双向量的 Qdrant 集合"""
+        """创建含 dense + sparse 双向量的 Qdrant 集合。
+
+        稀疏索引必须用 IDF 模式：本地只算 BM25 词频项，IDF 由 Qdrant 按集合统计计算。
+        """
         exists = await self.client.collection_exists(collection_name)
         if not exists:
             await self.client.create_collection(
@@ -103,9 +111,37 @@ class QdrantVectorStore:
                     "dense": VectorParams(size=vector_dim, distance=Distance.COSINE)
                 },
                 sparse_vectors_config={
-                    "sparse": SparseVectorParams(index=SparseIndexParams(on_disk=False))
+                    "sparse": SparseVectorParams(
+                        index=SparseIndexParams(on_disk=False),
+                        modifier=Modifier.IDF,
+                    )
                 },
             )
+
+    async def ensure_sparse_idf(self, collection_name: str) -> bool:
+        """把已存在的集合切到 IDF 稀疏索引（老集合需要的一次性修复）。"""
+        try:
+            info = await self.client.get_collection(collection_name)
+            sparse = (info.config.params.sparse_vectors or {}).get("sparse")
+            if sparse is not None and getattr(sparse, "modifier", None) == Modifier.IDF:
+                return False
+            await self.client.update_collection(
+                collection_name,
+                sparse_vectors_config={
+                    "sparse": SparseVectorParams(
+                        index=SparseIndexParams(on_disk=False),
+                        modifier=Modifier.IDF,
+                    )
+                },
+            )
+            return True
+        except Exception as exc:  # 兼容旧服务端：失败不阻塞检索
+            logger.warning(
+                "sparse_idf_update_failed",
+                collection=collection_name,
+                error=str(exc)[:200],
+            )
+            return False
 
     async def upsert_points(self, collection_name: str, points: list[ChunkPoint]) -> None:
         """批量写入 chunk 向量点"""
@@ -149,8 +185,13 @@ class QdrantVectorStore:
         top_k: int = 10,
         prefetch_limit: int = 20,
         doc_ids_filter: Optional[list[str]] = None,
+        debug_sink: Optional[dict] = None,
     ) -> list[SearchResult]:
-        """RRF 混合检索：dense + sparse prefetch → RRF Fusion"""
+        """RRF 混合检索：dense + sparse prefetch → RRF Fusion。
+
+        debug_sink 非空时（仅调试模式），额外查一次 dense / sparse 单路结果，
+        用于展示两路各自的分数与原始排名；主结果不受影响。
+        """
         query_filter = None
         if doc_ids_filter:
             query_filter = Filter(
@@ -186,6 +227,19 @@ class QdrantVectorStore:
         search_results = []
         for point in results.points:
             payload = point.payload or {}
+            metadata = {
+                key: value
+                for key, value in payload.items()
+                if key
+                not in {
+                    "text",
+                    "source_doc",
+                    "doc_id",
+                    "chunk_type",
+                    "page_num",
+                    "image_path",
+                }
+            }
             search_results.append(
                 SearchResult(
                     chunk_id=str(point.id),
@@ -196,9 +250,66 @@ class QdrantVectorStore:
                     chunk_type=payload.get("chunk_type", "text"),
                     page_num=payload.get("page_num"),
                     image_path=payload.get("image_path"),
+                    metadata=metadata,
                 )
             )
+
+        if debug_sink is not None:
+            await self._fill_debug_scores(
+                collection_name,
+                dense_vector,
+                sparse_indices,
+                sparse_values,
+                prefetch_limit,
+                query_filter,
+                debug_sink,
+            )
         return search_results
+
+    async def _fill_debug_scores(
+        self,
+        collection_name: str,
+        dense_vector: list[float],
+        sparse_indices: list[int],
+        sparse_values: list[float],
+        limit: int,
+        query_filter: Optional[Filter],
+        sink: dict,
+    ) -> None:
+        """调试采集：分别查 dense / sparse，记录每路的分数与原始排名。"""
+        sink["fusion"] = {"method": "rrf", "k": 60, "prefetch_limit": limit}
+
+        try:
+            dense_hits = await self.client.query_points(
+                collection_name=collection_name,
+                query=dense_vector,
+                using="dense",
+                limit=limit,
+                with_payload=False,
+                query_filter=query_filter,
+            )
+            sink["vector"] = {
+                str(point.id): {"score": float(point.score), "rank": rank}
+                for rank, point in enumerate(dense_hits.points, 1)
+            }
+        except Exception as exc:  # 调试失败不影响主链路
+            sink["vector_error"] = f"{type(exc).__name__}: {exc}"[:200]
+
+        try:
+            sparse_hits = await self.client.query_points(
+                collection_name=collection_name,
+                query=SparseVector(indices=sparse_indices, values=sparse_values),
+                using="sparse",
+                limit=limit,
+                with_payload=False,
+                query_filter=query_filter,
+            )
+            sink["sparse"] = {
+                str(point.id): {"score": float(point.score), "rank": rank}
+                for rank, point in enumerate(sparse_hits.points, 1)
+            }
+        except Exception as exc:
+            sink["sparse_error"] = f"{type(exc).__name__}: {exc}"[:200]
 
     async def delete_doc_points(self, collection_name: str, doc_id: str) -> None:
         """删除指定文档的所有向量点"""

@@ -1,5 +1,6 @@
 import client from './client'
 import type {
+  ExportJobStatus,
   KnowledgeBase,
   KnowledgeBaseCreate,
   KnowledgeBaseImportResult,
@@ -31,6 +32,23 @@ export const knowledgeBaseApi = {
   exportArchive: (id: string) =>
     client
       .get<Blob>(`/knowledge-bases/${id}/export`, {
+        responseType: 'blob',
+        timeout: 0,
+      })
+      .then((r) => r.data),
+
+  // 后台导出：立即返回 job，进度靠轮询（大库导出可能几十秒以上）
+  startExportJob: (id: string) =>
+    client.post<ExportJobStatus>(`/knowledge-bases/${id}/export/jobs`).then((r) => r.data),
+
+  exportJobStatus: (id: string, jobId: string) =>
+    client
+      .get<ExportJobStatus>(`/knowledge-bases/${id}/export/jobs/${jobId}`)
+      .then((r) => r.data),
+
+  downloadExportJob: (id: string, jobId: string) =>
+    client
+      .get<Blob>(`/knowledge-bases/${id}/export/jobs/${jobId}/download`, {
         responseType: 'blob',
         timeout: 0,
       })

@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol
 
 import httpx
 import structlog
 
 from config import get_settings
 from vector_store.qdrant_store import SearchResult
+
+if TYPE_CHECKING:
+    from core.observability.trace import QueryTrace
 
 logger = structlog.get_logger()
 
@@ -38,7 +41,53 @@ class Reranker(Protocol):
         query_text: str,
         results: list[SearchResult],
         top_k: Optional[int] = None,
+        trace: Optional["QueryTrace"] = None,
     ) -> list[SearchResult]: ...
+
+
+def _record_rerank(
+    trace: Optional["QueryTrace"],
+    *,
+    backend: str,
+    model: str,
+    results: list[SearchResult],
+    status: str = "applied",
+    order: Optional[list[int]] = None,
+    scores: Optional[list[float]] = None,
+    duration_ms: int = 0,
+    error: Optional[str] = None,
+) -> None:
+    """把一次重排的输入/输出顺序与分数写入 trace。"""
+    if trace is None or not trace.on("rerank"):
+        return
+    data: dict[str, Any] = {
+        "enabled": status == "applied",
+        "status": status,
+        "backend": backend,
+        "model": model,
+        "candidates": len(results),
+        "duration_ms": duration_ms,
+        "order_before": [r.chunk_id for r in results],
+    }
+    if order is not None:
+        data["order_after"] = [results[i].chunk_id for i in order]
+    if scores is not None and order is not None:
+        data["scores"] = {results[i].chunk_id: round(scores[i], 6) for i in order}
+        data["top_score"] = round(scores[order[0]], 6) if order else None
+        # 每个候选的「进重排前分数/排名」→「重排后分数/排名」，用于判断重排是否把正确答案挤后
+        data["candidates_detail"] = [
+            {
+                "chunk_id": results[i].chunk_id,
+                "rank_before": i + 1,
+                "rank_after": rank,
+                "score_before": round(results[i].score, 6),
+                "score_after": round(scores[i], 6),
+            }
+            for rank, i in enumerate(order, 1)
+        ]
+    if error:
+        data["error"] = error
+    trace.update("rerank", data)
 
 
 def _parse_rerank_scores(body: Any, expected: int) -> list[float]:
@@ -88,10 +137,26 @@ class HttpReranker:
         query_text: str,
         results: list[SearchResult],
         top_k: Optional[int] = None,
+        trace: Optional["QueryTrace"] = None,
     ) -> list[SearchResult]:
         if len(results) < 2:
+            _record_rerank(
+                trace,
+                backend="http",
+                model=self._model,
+                results=results,
+                status="skipped",
+            )
             return results[:top_k] if top_k else results
         if time.monotonic() < self._cooldown_until:
+            _record_rerank(
+                trace,
+                backend="http",
+                model=self._model,
+                results=results,
+                status="cooldown",
+                error="rerank 服务处于失败冷却期",
+            )
             return results[:top_k] if top_k else results
 
         started = time.perf_counter()
@@ -105,6 +170,15 @@ class HttpReranker:
                 model=self._model,
                 error=str(exc)[:200],
             )
+            _record_rerank(
+                trace,
+                backend="http",
+                model=self._model,
+                results=results,
+                status="failed",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                error=f"{type(exc).__name__}: {exc}"[:300],
+            )
             return results[:top_k] if top_k else results
 
         order = sorted(range(len(results)), key=lambda i: scores[i], reverse=True)
@@ -114,13 +188,23 @@ class HttpReranker:
             item = results[index]
             item.rerank_score = scores[index]
             reranked.append(item)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        _record_rerank(
+            trace,
+            backend="http",
+            model=self._model,
+            results=results,
+            order=order[:top_k] if top_k else order,
+            scores=scores,
+            duration_ms=elapsed_ms,
+        )
         logger.info(
             "rerank_applied",
             backend="http",
             model=self._model,
             candidates=len(results),
             top_score=round(scores[order[0]], 4),
-            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            elapsed_ms=elapsed_ms,
         )
         return reranked[:top_k] if top_k else reranked
 
@@ -165,36 +249,53 @@ class FlashRankReranker:
 
     def _sync_rerank(
         self, query_text: str, results: list[SearchResult]
-    ) -> list[SearchResult]:
+    ) -> tuple[list[SearchResult], list[int], list[float]]:
+        """返回 (重排后的结果, 原始下标顺序, 与原始下标对齐的分数)。"""
         self._ensure_loaded()
         from flashrank import RerankRequest
 
         passages = [{"id": r.chunk_id, "text": r.text} for r in results]
         reranked = self._ranker.rerank(RerankRequest(query=query_text, passages=passages))
 
-        id_to_result = {r.chunk_id: r for r in results}
-        ordered = []
+        id_to_index = {r.chunk_id: i for i, r in enumerate(results)}
+        scores = [0.0] * len(results)
+        order: list[int] = []
+        ordered: list[SearchResult] = []
         for item in reranked:
             chunk_id = item.get("id") or item.get("text", "")[:50]
-            original = id_to_result.get(chunk_id)
-            if original is not None:
-                score = item.get("score")
-                original.rerank_score = float(score) if score is not None else None
-                ordered.append(original)
-        return ordered
+            index = id_to_index.get(chunk_id)
+            if index is None:
+                continue
+            score = item.get("score")
+            value = float(score) if score is not None else None
+            results[index].rerank_score = value
+            scores[index] = value if value is not None else 0.0
+            order.append(index)
+            ordered.append(results[index])
+        return ordered, order, scores
 
     async def rerank(
         self,
         query_text: str,
         results: list[SearchResult],
         top_k: Optional[int] = None,
+        trace: Optional["QueryTrace"] = None,
     ) -> list[SearchResult]:
         if len(results) < 2:
+            _record_rerank(
+                trace,
+                backend="flashrank",
+                model=self._model_name,
+                results=results,
+                status="skipped",
+            )
             return results[:top_k] if top_k else results
 
         started = time.perf_counter()
         try:
-            reranked = await asyncio.to_thread(self._sync_rerank, query_text, results)
+            reranked, order, scores = await asyncio.to_thread(
+                self._sync_rerank, query_text, results
+            )
         except Exception as exc:
             logger.warning(
                 "rerank_failed",
@@ -202,14 +303,33 @@ class FlashRankReranker:
                 model=self._model_name,
                 error=str(exc)[:200],
             )
+            _record_rerank(
+                trace,
+                backend="flashrank",
+                model=self._model_name,
+                results=results,
+                status="failed",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                error=f"{type(exc).__name__}: {exc}"[:300],
+            )
             return results[:top_k] if top_k else results
 
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        _record_rerank(
+            trace,
+            backend="flashrank",
+            model=self._model_name,
+            results=results,
+            order=order[:top_k] if top_k else order,
+            scores=scores,
+            duration_ms=elapsed_ms,
+        )
         logger.info(
             "rerank_applied",
             backend="flashrank",
             model=self._model_name,
             candidates=len(results),
-            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            elapsed_ms=elapsed_ms,
         )
         return reranked[:top_k] if top_k else reranked
 

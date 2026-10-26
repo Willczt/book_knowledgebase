@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 import uuid
@@ -10,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
 from api.deps import get_db, get_kb_or_404, get_qdrant
-from core import transfer
+from core import export_jobs, transfer
 from db import crud
+from db.engine import AsyncSessionLocal
 from db.models import KnowledgeBase
 from db.schemas import (
     KnowledgeBaseCreate,
@@ -23,6 +25,9 @@ from db.schemas import (
 from vector_store.qdrant_store import QdrantVectorStore
 
 router = APIRouter(prefix="/knowledge-bases", tags=["Knowledge Base"])
+
+# 后台导出任务需要持有引用，否则可能被 GC 回收
+_export_tasks: set[asyncio.Task] = set()
 
 
 def _remove_file(path: Path) -> None:
@@ -163,6 +168,84 @@ async def export_knowledge_base(
         media_type="application/zip",
         filename=filename,
         background=BackgroundTask(_remove_file, tmp_path),
+    )
+
+
+async def _run_export_job(
+    job: export_jobs.ExportJob,
+    kb_id: str,
+    qdrant: QdrantVectorStore,
+) -> None:
+    """后台线程里跑导出：自己开 DB 会话，进度写回任务状态。"""
+    fd, tmp_name = tempfile.mkstemp(prefix="kb-export-", suffix=".zip")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+
+    def on_progress(stage: str, percent: float) -> None:
+        export_jobs.update(job, percent=percent, stage=stage)
+
+    try:
+        async with AsyncSessionLocal() as db:
+            kb = await crud.get_kb(db, kb_id)
+            if kb is None:
+                raise RuntimeError("知识库已被删除")
+            await transfer.export_kb(db, kb, qdrant, tmp_path, progress=on_progress)
+        export_jobs.finish(job, tmp_path)
+    except Exception as exc:
+        _remove_file(tmp_path)
+        export_jobs.fail(job, f"{type(exc).__name__}: {exc}")
+
+
+@router.post("/{kb_id}/export/jobs", status_code=status.HTTP_202_ACCEPTED)
+async def start_export_job(
+    kb: Annotated[KnowledgeBase, Depends(get_kb_or_404)],
+    qdrant: Annotated[QdrantVectorStore, Depends(get_qdrant)],
+):
+    """启动后台导出任务，立即返回 job_id；进度用下面的状态接口轮询。"""
+    running = export_jobs.find_running(kb.id)
+    if running is not None:
+        return running.to_dict()
+
+    filename = f"{transfer.safe_filename(kb.name, 'knowledge-base')}.kbz.zip"
+    job = export_jobs.create_job(kb.id, kb.name, filename)
+    task = asyncio.create_task(_run_export_job(job, kb.id, qdrant))
+    _export_tasks.add(task)
+    task.add_done_callback(_export_tasks.discard)
+    return job.to_dict()
+
+
+@router.get("/{kb_id}/export/jobs/{job_id}")
+async def export_job_status(
+    kb: Annotated[KnowledgeBase, Depends(get_kb_or_404)],
+    job_id: str,
+):
+    job = export_jobs.get_job(job_id)
+    if job is None or job.kb_id != kb.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在或已过期")
+    return job.to_dict()
+
+
+@router.get("/{kb_id}/export/jobs/{job_id}/download")
+async def download_export_job(
+    kb: Annotated[KnowledgeBase, Depends(get_kb_or_404)],
+    job_id: str,
+):
+    job = export_jobs.get_job(job_id)
+    if job is None or job.kb_id != kb.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在或已过期")
+    if job.status == "failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=job.error or "导出失败",
+        )
+    if job.status != "done" or job.path is None or not job.path.is_file():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="导出尚未完成")
+
+    return FileResponse(
+        job.path,
+        media_type="application/zip",
+        filename=job.filename,
+        background=BackgroundTask(export_jobs.mark_downloaded, job),
     )
 
 

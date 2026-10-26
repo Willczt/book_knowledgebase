@@ -58,6 +58,7 @@ class FakeQdrant:
         top_k: int = 10,
         prefetch_limit: int = 20,
         doc_ids_filter: list[str] | None = None,
+        debug_sink: dict | None = None,
     ) -> list:
         self.last_search = {
             "collection": collection_name,
@@ -65,7 +66,19 @@ class FakeQdrant:
             "prefetch_limit": prefetch_limit,
             "doc_ids_filter": doc_ids_filter,
         }
-        return list(self.results.get(collection_name, []))[:top_k]
+        hits = list(self.results.get(collection_name, []))[:top_k]
+        if debug_sink is not None:
+            # 调试采集：按结果顺序伪造两路分数与原始排名
+            debug_sink["fusion"] = {"method": "rrf", "k": 60, "prefetch_limit": prefetch_limit}
+            debug_sink["vector"] = {
+                hit.chunk_id: {"score": 0.9 - index * 0.05, "rank": index + 1}
+                for index, hit in enumerate(hits)
+            }
+            debug_sink["sparse"] = {
+                hit.chunk_id: {"score": 0.5 - index * 0.05, "rank": index + 1}
+                for index, hit in enumerate(hits)
+            }
+        return hits
 
 
 @pytest.fixture

@@ -2,19 +2,21 @@ import { useState, useRef } from 'react'
 import { Send, Image, X, Sparkles } from 'lucide-react'
 import clsx from 'clsx'
 
+import { RetrievalSettings, type RetrievalOptions } from './RetrievalSettings'
+
 interface ChatInputProps {
   onSend: (content: string, image?: string) => void
   disabled?: boolean
-  /** 是否启用 rerank 重排（状态由父组件持有，默认开启） */
-  rerankEnabled?: boolean
-  onToggleRerank?: () => void
+  /** 检索参数（状态由父组件持有并持久化） */
+  retrieval: RetrievalOptions
+  onRetrievalChange: (next: RetrievalOptions) => void
 }
 
 export function ChatInput({
   onSend,
   disabled,
-  rerankEnabled = true,
-  onToggleRerank,
+  retrieval,
+  onRetrievalChange,
 }: ChatInputProps) {
   const [content, setContent] = useState('')
   const [imagePreview, setImagePreview] = useState<string | null>(null)
@@ -103,16 +105,16 @@ export function ChatInput({
           <div className="flex items-center gap-1 shrink-0 pb-0.5">
             <button
               type="button"
-              onClick={onToggleRerank}
-              aria-pressed={rerankEnabled}
+              onClick={() => onRetrievalChange({ ...retrieval, use_reranker: !retrieval.use_reranker })}
+              aria-pressed={retrieval.use_reranker}
               className={clsx(
                 'h-7 px-2 rounded-lg flex items-center gap-1 text-[11px] border transition-all duration-200',
-                rerankEnabled
+                retrieval.use_reranker
                   ? 'text-brand-light border-brand/40 bg-brand/10 hover:bg-brand/20'
                   : 'text-gray-500 border-white/[0.07] bg-white/[0.02] hover:text-gray-300 hover:border-white/15',
               )}
               title={
-                rerankEnabled
+                retrieval.use_reranker
                   ? '重排已开启：检索结果会经 rerank 模型精排（点击关闭）'
                   : '重排已关闭：直接使用向量检索顺序（点击开启）'
               }
@@ -120,6 +122,12 @@ export function ChatInput({
               <Sparkles size={13} />
               重排
             </button>
+
+            <RetrievalSettings
+              value={retrieval}
+              onChange={onRetrievalChange}
+              disabled={disabled}
+            />
 
             <button
               onClick={() => fileInputRef.current?.click()}

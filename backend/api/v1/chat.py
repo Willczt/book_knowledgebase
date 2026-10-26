@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.deps import decode_base64_image, get_db, get_qdrant, get_session_or_404
 from config import get_settings
 from core.llm.registry import create_llm_provider
+from core.observability.trace import new_trace, record_trace
 from core.rag.pipeline import RAGPipeline
 from core.retrieval.reranker import get_reranker
 from core.retrieval.retriever import HybridRetriever
@@ -72,6 +73,7 @@ async def stream_chat(
         if retrieval_cfg and retrieval_cfg.use_reranker is not None
         else settings.rerank_enabled
     )
+    rerank_candidates = retrieval_cfg.rerank_candidates if retrieval_cfg else None
 
     reranker = get_reranker() if use_reranker else None
     retriever = HybridRetriever(
@@ -80,6 +82,21 @@ async def stream_chat(
         reranker=reranker,
     )
     pipeline = RAGPipeline(retriever=retriever, llm_provider=llm, kb=kb)
+
+    # 调试模式开启时创建 trace（关闭时返回 None，主链路零负担）
+    trace = new_trace(body.content, kind="chat")
+    if trace is not None:
+        trace.update(
+            "query",
+            {
+                "kb_id": kb.id,
+                "kb_name": kb.name,
+                "session_id": session.id,
+                "llm": f"{session.llm_provider}/{session.llm_model_id}",
+                "rerank_backend": settings.rerank_backend if use_reranker else None,
+                "rerank_model": reranker.model_name if reranker is not None else None,
+            },
+        )
 
     message_id = str(uuid.uuid4())
     full_response = []
@@ -97,6 +114,8 @@ async def stream_chat(
                 top_k=top_k,
                 score_threshold=score_threshold,
                 use_reranker=use_reranker,
+                rerank_candidates=rerank_candidates,
+                trace=trace,
             ):
                 if "token" in event:
                     full_response.append(event["token"])
@@ -106,16 +125,20 @@ async def stream_chat(
                     rewritten_query = event.get("rewritten_query")
         except Exception as e:
             error_message = str(e) or type(e).__name__
+            if trace is not None:
+                trace.fail("chat", e)
+                trace.set("generation", "error", error_message[:500])
             yield f"data: {json.dumps({'error': error_message}, ensure_ascii=False)}\n\n"
         finally:
             # 持久化消息
             full_text = "".join(full_response)
+            trace_id = await record_trace(trace)
             if not full_text.strip():
                 # 没有正文：告知前端明确原因，避免出现"空气泡"
                 if error_message is None:
-                    yield f"data: {json.dumps({'error': '模型没有返回任何内容，请重试'}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'error': '模型没有返回任何内容，请重试', 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
             else:
-                yield f"data: {json.dumps({'done': True, 'message_id': message_id, 'sources': sources_data, 'rewritten_query': rewritten_query}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'done': True, 'message_id': message_id, 'sources': sources_data, 'rewritten_query': rewritten_query, 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
             # 将查询图片落盘，供后续消息历史展示
             saved_image_paths: list[str] = []
             if query_image:
