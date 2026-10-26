@@ -11,26 +11,80 @@ interface ChatWindowProps {
   sessionId: string
 }
 
+// 首屏与「加载更早」共用的每页条数
+const PAGE_SIZE = 50
+
 export function ChatWindow({ sessionId }: ChatWindowProps) {
   const { messages, setMessages, appendMessage, updateMessage } = useSessionStore()
   const [isStreaming, setIsStreaming] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sendingRef = useRef(false)
+  // 加载更早消息时保持视口位置，不要让页面跳到底部
+  const pendingPrependRef = useRef(false)
+  const prevScrollHeightRef = useRef(0)
   const { sendMessage, abort } = useSSEChat()
 
   useEffect(() => {
     // 切换会话时中断正在进行的流式请求，防止旧 token 污染新会话
     abort()
     setIsStreaming(false)
-    sessionsApi.messages(sessionId).then(setMessages).catch(console.error)
-    return () => { abort() }
+    // 快速切换会话时，先发出的请求可能后返回，需要丢弃过期结果
+    let cancelled = false
+    setHasMore(false)
+    setLoadingOlder(false)
+    sessionsApi
+      .messages(sessionId, 1, PAGE_SIZE, true)
+      .then((data) => {
+        if (cancelled) return
+        setMessages(data)
+        setHasMore(data.length >= PAGE_SIZE)
+      })
+      .catch(console.error)
+    return () => {
+      cancelled = true
+      abort()
+    }
+    // abort / setMessages 来自 hook 与 store，引用稳定；
+    // 若加入依赖数组，每次渲染都会重新拉取消息
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    const el = scrollRef.current
+    if (!el) return
+    if (pendingPrependRef.current) {
+      // 只补上新增内容的高度，保持用户当前阅读位置
+      pendingPrependRef.current = false
+      el.scrollTop = el.scrollHeight - prevScrollHeightRef.current
+      return
     }
+    el.scrollTop = el.scrollHeight
   }, [messages])
+
+  const loadOlder = async () => {
+    const el = scrollRef.current
+    const oldest = messages[0]?.created_at
+    if (!el || !oldest || loadingOlder) return
+
+    setLoadingOlder(true)
+    prevScrollHeightRef.current = el.scrollHeight
+    pendingPrependRef.current = true
+    try {
+      const older = await sessionsApi.history(sessionId, oldest, PAGE_SIZE)
+      const current = useSessionStore.getState().messages
+      const existing = new Set(current.map((m) => m.id))
+      const fresh = older.filter((m) => !existing.has(m.id))
+      if (fresh.length) setMessages([...fresh, ...current])
+      setHasMore(older.length >= PAGE_SIZE)
+    } catch (e) {
+      pendingPrependRef.current = false
+      console.error(e)
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
 
   const handleSend = async (content: string, image?: string) => {
     // 用 ref 而不是 state 做互斥：state 更新是异步的，快速连点两次会发出两个并发请求
@@ -150,6 +204,17 @@ export function ChatWindow({ sessionId }: ChatWindowProps) {
           </div>
         ) : (
           <div className="max-w-3xl mx-auto px-6 py-6">
+            {hasMore && (
+              <div className="flex justify-center pb-3">
+                <button
+                  onClick={loadOlder}
+                  disabled={loadingOlder}
+                  className="px-3 py-1 rounded-full text-[11px] text-gray-500 border border-white/[0.07] bg-white/[0.02] hover:text-gray-200 hover:border-brand/40 transition-all disabled:opacity-50"
+                >
+                  {loadingOlder ? '加载中…' : '加载更早的消息'}
+                </button>
+              </div>
+            )}
             {messages.map((msg, idx) => (
               <MessageBubble
                 key={msg.id}

@@ -2,15 +2,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from api.deps import decode_base64_image, get_kb_or_404
+from api.deps import decode_base64_image, get_kb_or_404, get_qdrant
 from config import get_settings
 from core.embedding.registry import get_embedding_registry
-from core.retrieval.reranker import CrossEncoderReranker
+from core.retrieval.reranker import get_reranker
 from core.retrieval.retriever import HybridRetriever
 from db.models import KnowledgeBase
 from db.schemas import SearchRequest, SearchResponse, SourceChunk
 from vector_store.qdrant_store import QdrantVectorStore
-from api.deps import get_qdrant
 
 router = APIRouter(prefix="/knowledge-bases", tags=["Search"])
 settings = get_settings()
@@ -37,7 +36,7 @@ async def search(
         raise HTTPException(status_code=409, detail=str(e))
 
     query_image = decode_base64_image(body.image)
-    reranker = CrossEncoderReranker() if body.use_reranker else None
+    reranker = get_reranker() if body.use_reranker else None
     retriever = HybridRetriever(
         vector_store=qdrant,
         embedding_provider=embedding_provider,

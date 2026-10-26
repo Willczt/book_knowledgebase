@@ -18,9 +18,20 @@ export const sessionsApi = {
 
   delete: (id: string) => client.delete(`/sessions/${id}`),
 
-  messages: (id: string, page = 1, pageSize = 50) =>
+  // latest=true 取最近 N 条（长会话不会只看到最早的那批）
+  messages: (id: string, page = 1, pageSize = 50, latest = false) =>
     client
-      .get<Message[]>(`/sessions/${id}/messages`, { params: { page, page_size: pageSize } })
+      .get<Message[]>(`/sessions/${id}/messages`, {
+        params: { page, page_size: pageSize, latest },
+      })
+      .then((r) => r.data),
+
+  // 取 before 之前的最近 N 条（升序），用于「加载更早」
+  history: (id: string, before: string, pageSize = 50) =>
+    client
+      .get<Message[]>(`/sessions/${id}/messages`, {
+        params: { before, page_size: pageSize },
+      })
       .then((r) => r.data),
 
   exportArchive: (id: string) =>

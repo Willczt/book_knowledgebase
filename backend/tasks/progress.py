@@ -8,7 +8,6 @@
 import time
 from typing import Optional
 
-
 _PROGRESS: dict[str, dict] = {}
 
 

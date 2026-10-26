@@ -19,7 +19,7 @@ class MarkdownParser(DocumentParser):
         filename = os.path.basename(file_path)
         base_dir = Path(file_path).parent
 
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             content = f.read()
 
         # 按 ## 或更高级标题切分章节

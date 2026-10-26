@@ -1,11 +1,15 @@
 import asyncio
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import structlog
 
 from core.embedding.base import EmbeddingProvider
+from core.retrieval.sparse import embed_sparse
 from vector_store.qdrant_store import QdrantVectorStore, SearchResult
+
+if TYPE_CHECKING:  # 仅类型检查时导入，避免与 reranker 形成循环依赖
+    from core.retrieval.reranker import CrossEncoderReranker
 
 logger = structlog.get_logger()
 
@@ -21,9 +25,7 @@ class RetrievalQuery:
     doc_ids_filter: Optional[list[str]] = None
 
 
-def _get_sparse_encoder():
-    from fastembed import SparseTextEmbedding
-    return SparseTextEmbedding(model_name="Qdrant/bm25")
+
 
 
 class HybridRetriever:
@@ -41,7 +43,6 @@ class HybridRetriever:
         self._store = vector_store
         self._embedding_provider = embedding_provider
         self._reranker = reranker
-        self._sparse_encoder = _get_sparse_encoder()
 
     async def build_query(
         self,
@@ -56,18 +57,15 @@ class HybridRetriever:
             query_text, query_image
         )
 
-        # Sparse BM25 embedding（同步，在线程池执行）
-        sparse_results = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: list(self._sparse_encoder.embed([query_text])),
-        )
-        sparse = sparse_results[0]
+        # Sparse BM25 embedding（同步模型，放线程池避免阻塞事件循环）
+        sparse_results = await asyncio.to_thread(embed_sparse, [query_text])
+        indices, values = sparse_results[0]
 
         return RetrievalQuery(
             query_text=query_text,
             dense_vector=dense_vector,
-            sparse_indices=sparse.indices.tolist(),
-            sparse_values=sparse.values.tolist(),
+            sparse_indices=indices,
+            sparse_values=values,
             top_k=top_k,
             score_threshold=score_threshold,
         )

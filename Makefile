@@ -1,4 +1,4 @@
-.PHONY: dev dev-qdrant install install-frontend lint format migrate
+.PHONY: dev dev-qdrant install install-frontend lint test check format migrate
 
 # 优先使用项目内 venv，否则回退系统 python3
 PY := $(wildcard $(CURDIR)/.venv/bin/python)
@@ -41,14 +41,21 @@ migrate:
 migration:
 	cd backend && alembic revision --autogenerate -m "$(msg)"
 
-# 代码检查
+# 代码检查（后端 ruff + 前端 eslint/tsc）
 lint:
-	cd backend && ruff check .
+	cd backend && $(PY) -m ruff check .
 	cd frontend && npm run lint
+
+# 单元测试（离线，不依赖 Qdrant / 外部模型服务）
+test:
+	cd backend && $(PY) -m pytest
+
+# 提交前一键门禁
+check: lint test
 
 # 代码格式化
 format:
-	cd backend && ruff format .
+	cd backend && $(PY) -m ruff format .
 
 # 生产构建
 build:

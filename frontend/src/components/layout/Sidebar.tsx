@@ -1,339 +1,29 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Trash2, Upload, Download, Pencil, X, ChevronDown, ChevronRight,
-  RefreshCw, Database, BookOpen, MessageSquare, Sparkles,
+  RefreshCw, RotateCcw, Database, BookOpen, MessageSquare, Sparkles,
 } from 'lucide-react'
+import clsx from 'clsx'
+
 import { knowledgeBaseApi } from '../../api/knowledgeBase'
 import { documentsApi } from '../../api/documents'
 import { sessionsApi } from '../../api/sessions'
 import { systemApi } from '../../api/system'
 import { useKBStore } from '../../stores/kbStore'
 import { useSessionStore } from '../../stores/sessionStore'
-import { ChatWindow } from '../chat/ChatWindow'
 import { APP_NAME, APP_TAGLINE } from '../../branding'
+import { downloadBlob } from '../../utils/download'
+import { InlineRename } from '../ui/InlineRename'
+import { CreateKBModal } from '../modals/CreateKBModal'
+import { DocumentUploader, useIngestProgress } from '../documents/DocumentUploader'
 import type {
-  Document,
-  EmbeddingModelInfo,
   HealthResponse,
-  IngestProgress,
   KnowledgeBase,
   LLMProviderInfo,
   Session,
 } from '../../types/api'
-import clsx from 'clsx'
-
-/** 触发浏览器下载 */
-function downloadBlob(data: Blob, filename: string) {
-  const url = URL.createObjectURL(data)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-/** 行内重命名输入框：Enter 提交，Esc 取消，失焦提交 */
-function InlineRename({
-  value,
-  onChange,
-  onSubmit,
-  onCancel,
-}: {
-  value: string
-  onChange: (v: string) => void
-  onSubmit: () => void
-  onCancel: () => void
-}) {
-  // Enter 提交后输入框会卸载并触发一次 blur，用 ref 防止重复提交
-  const submitted = useRef(false)
-  const submit = () => {
-    if (submitted.current) return
-    submitted.current = true
-    onSubmit()
-  }
-
-  return (
-    <input
-      className="flex-1 min-w-0 bg-white/[0.06] border border-brand/40 rounded-md px-1.5 py-0.5 text-xs text-gray-100 outline-none focus:border-brand"
-      value={value}
-      autoFocus
-      onChange={(e) => onChange(e.target.value)}
-      onClick={(e) => e.stopPropagation()}
-      onBlur={submit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') submit()
-        if (e.key === 'Escape') {
-          submitted.current = true
-          onCancel()
-        }
-      }}
-    />
-  )
-}
-
-function CreateKBModal({ onClose }: { onClose: () => void }) {
-  const [name, setName] = useState('')
-  const [desc, setDesc] = useState('')
-  const [provider, setProvider] = useState('doubao')
-  const [modelId, setModelId] = useState('doubao-embedding-vision-251215')
-  const [dim, setDim] = useState(2048)
-  const queryClient = useQueryClient()
-  const addKB = useKBStore((s) => s.addKB)
-
-  const { data: models } = useQuery<EmbeddingModelInfo[]>({
-    queryKey: ['embedding-models'],
-    queryFn: async () => {
-      const r = await fetch('/api/v1/embedding-models')
-      return r.json()
-    },
-  })
-
-  // 默认选中第一个「当前真正可用」的模型（例如去掉 Ark Key 后不再默认豆包）
-  useEffect(() => {
-    if (!models?.length) return
-    const exists = models.some((m) => m.provider === provider && m.model_id === modelId)
-    if (!exists) {
-      setProvider(models[0].provider)
-      setModelId(models[0].model_id)
-      setDim(models[0].vector_dim)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [models])
-
-  const mutation = useMutation({
-    mutationFn: () =>
-      knowledgeBaseApi.create({
-        name,
-        description: desc || undefined,
-        embedding_provider: provider,
-        embedding_model_id: modelId,
-        embedding_vector_dim: dim,
-      }),
-    onSuccess: (kb) => {
-      addKB(kb)
-      queryClient.invalidateQueries({ queryKey: ['kbs'] })
-      onClose()
-    },
-  })
-
-  const handleSelectModel = (m: EmbeddingModelInfo) => {
-    setProvider(m.provider)
-    setModelId(m.model_id)
-    setDim(m.vector_dim)
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
-      <div className="glass-card w-full max-w-md p-6 animate-slide-up">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-2">
-            <div className="logo-mark w-7 h-7 rounded-lg flex items-center justify-center">
-              <Database size={13} className="text-brand-light" />
-            </div>
-            <h2 className="text-sm font-semibold text-gray-100">新建知识库</h2>
-          </div>
-          <button onClick={onClose} className="btn-icon"><X size={15} /></button>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="text-xs text-gray-500 mb-1.5 block font-medium">名称 *</label>
-            <input
-              className="input-base w-full"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="如：机器学习书单"
-              autoFocus
-            />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500 mb-1.5 block font-medium">描述</label>
-            <textarea
-              className="input-base w-full resize-none"
-              rows={2}
-              value={desc}
-              onChange={(e) => setDesc(e.target.value)}
-              placeholder="可选"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500 mb-2 block font-medium">
-              Embedding 模型
-              <span className="ml-1.5 text-[10px] text-amber-500/80 font-normal">创建后不可更改</span>
-            </label>
-            <div className="space-y-2">
-              {models?.map((m) => (
-                <label
-                  key={`${m.provider}/${m.model_id}`}
-                  className={clsx(
-                    'flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-150',
-                    provider === m.provider && modelId === m.model_id
-                      ? 'border-brand/60 bg-brand/10'
-                      : 'border-white/[0.06] hover:border-white/[0.12] bg-surface-2/60',
-                  )}
-                >
-                  <input
-                    type="radio"
-                    className="mt-0.5 accent-brand"
-                    checked={provider === m.provider && modelId === m.model_id}
-                    onChange={() => handleSelectModel(m)}
-                  />
-                  <div className="text-xs">
-                    <div className="font-semibold text-gray-200">{m.model_id}</div>
-                    <div className="text-gray-500 mt-0.5">{m.description}</div>
-                    <div className="text-gray-700 mt-0.5 font-mono">dim={m.vector_dim}</div>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-2 mt-6">
-          <button onClick={onClose} className="btn-ghost text-sm">取消</button>
-          <button
-            onClick={() => mutation.mutate()}
-            disabled={!name.trim() || mutation.isPending}
-            className="btn-primary text-sm px-5"
-          >
-            {mutation.isPending ? '创建中...' : '创建知识库'}
-          </button>
-        </div>
-        {mutation.isError && (
-          <p className="text-red-400 text-xs mt-2 px-1">{mutation.error.message}</p>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function DocumentUploader({ kbId }: { kbId: string }) {
-  const [uploading, setUploading] = useState(false)
-  const [isDragOver, setIsDragOver] = useState(false)
-  const queryClient = useQueryClient()
-
-  const handleFiles = async (files: FileList) => {
-    setUploading(true)
-    for (const file of Array.from(files)) {
-      try {
-        const doc = await documentsApi.upload(kbId, file)
-        const poll = async () => {
-          const status = await documentsApi.status(kbId, doc.id)
-          if (status.status === 'indexed' || status.status === 'failed') {
-            queryClient.invalidateQueries({ queryKey: ['documents', kbId] })
-          } else {
-            setTimeout(poll, 2000)
-          }
-        }
-        poll()
-      } catch (e) {
-        console.error(e)
-      }
-    }
-    setUploading(false)
-    queryClient.invalidateQueries({ queryKey: ['documents', kbId] })
-  }
-
-  return (
-    <label
-      className={clsx(
-        'flex flex-col items-center justify-center rounded-xl py-4 px-3 cursor-pointer transition-all duration-200 border-2 border-dashed',
-        isDragOver
-          ? 'border-brand/60 bg-brand/10'
-          : 'border-white/[0.08] hover:border-brand/40 hover:bg-brand/5',
-      )}
-      onDragOver={(e) => { e.preventDefault(); setIsDragOver(true) }}
-      onDragLeave={() => setIsDragOver(false)}
-      onDrop={(e) => { e.preventDefault(); setIsDragOver(false); e.dataTransfer.files && handleFiles(e.dataTransfer.files) }}
-    >
-      <Upload size={16} className={clsx('mb-1.5 transition-colors', isDragOver ? 'text-brand-light' : 'text-gray-600')} />
-      <span className="text-[11px] text-gray-600 text-center">
-        {uploading ? (
-          <span className="text-brand-light animate-pulse">上传中...</span>
-        ) : (
-          <>点击或拖拽文件<br /><span className="text-gray-700">PDF · EPUB · Markdown · TXT</span></>
-        )}
-      </span>
-      <input
-        type="file"
-        accept=".pdf,.epub,.md,.markdown,.txt,.text,text/plain"
-        multiple
-        className="hidden"
-        onChange={(e) => e.target.files && handleFiles(e.target.files)}
-        disabled={uploading}
-      />
-    </label>
-  )
-}
-
-/**
- * 轮询处理中文档的摄入进度。
- * 只对 pending/processing 的文档发请求，全部处理完就自动停下。
- */
-function useIngestProgress(
-  kbId: string | null,
-  docs: Document[] | undefined,
-  onFinished: () => void,
-): Record<string, IngestProgress> {
-  const [progressMap, setProgressMap] = useState<Record<string, IngestProgress>>({})
-  const finishedRef = useRef(false)
-
-  const pendingIds = (docs ?? [])
-    .filter((d) => d.status === 'pending' || d.status === 'processing')
-    .map((d) => d.id)
-  const pendingKey = pendingIds.join(',')
-
-  useEffect(() => {
-    if (!kbId || !pendingKey) {
-      setProgressMap({})
-      return
-    }
-    const ids = pendingKey.split(',')
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    finishedRef.current = false
-
-    const tick = async () => {
-      const next: Record<string, IngestProgress> = {}
-      let allDone = true
-      await Promise.all(
-        ids.map(async (id) => {
-          try {
-            const status = await documentsApi.status(kbId, id)
-            if (status.progress) next[id] = status.progress
-            if (status.status !== 'indexed' && status.status !== 'failed') allDone = false
-          } catch {
-            allDone = false
-          }
-        }),
-      )
-      if (cancelled) return
-      setProgressMap(next)
-      if (allDone) {
-        if (!finishedRef.current) {
-          finishedRef.current = true
-          onFinished()
-        }
-        return
-      }
-      timer = setTimeout(tick, 1500)
-    }
-
-    tick()
-    return () => {
-      cancelled = true
-      if (timer) clearTimeout(timer)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kbId, pendingKey])
-
-  return progressMap
-}
 
 export function Sidebar() {
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -392,6 +82,15 @@ export function Sidebar() {
   }
 
   // 移除摄入失败的文档（含服务重启后残留的僵尸任务）
+  const handleReindex = async (kbId: string, docId: string) => {
+    try {
+      await documentsApi.reindex(kbId, docId)
+      queryClient.invalidateQueries({ queryKey: ['documents', kbId] })
+    } catch (e) {
+      alert((e as Error).message)
+    }
+  }
+
   const handleDeleteDoc = async (kbId: string, docId: string) => {
     try {
       await documentsApi.delete(kbId, docId)
@@ -406,7 +105,12 @@ export function Sidebar() {
     if (!kb) return
     setActiveKB(kb)
     setActiveSession(null)
-    await loadSessions(kbId)
+    try {
+      await loadSessions(kbId)
+    } catch (e) {
+      console.error(e)
+      setSessions([])
+    }
   }
 
   const handleNewSession = async () => {
@@ -687,6 +391,18 @@ export function Sidebar() {
                       {doc.status === 'indexed' && (
                         <span className="text-gray-700 shrink-0 text-[10px]">{doc.chunk_count}</span>
                       )}
+                      {(doc.status === 'failed' || doc.status === 'pending') && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleReindex(kb.id, doc.id)
+                          }}
+                          title="重建索引"
+                          className="shrink-0 text-gray-600 hover:text-brand-light transition-colors"
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      )}
                       {doc.status === 'failed' && (
                         <button
                           onClick={() => handleDeleteDoc(kb.id, doc.id)}
@@ -874,83 +590,5 @@ export function Sidebar() {
           document.body,
         )}
     </aside>
-  )
-}
-
-export function MainContent() {
-  const activeSession = useSessionStore((s) => s.activeSession)
-  const activeKB = useKBStore((s) => s.activeKB)
-
-  if (!activeKB) {
-    return (
-      <div className="relative z-10 flex-1 flex items-center justify-center">
-        <div className="text-center animate-fade-in">
-          {/* Gradient orbs */}
-          <div className="relative mb-8 flex justify-center">
-            <div className="absolute w-36 h-36 rounded-full blur-3xl opacity-30 -translate-y-2"
-              style={{ background: 'radial-gradient(circle, #7c3aed, transparent)' }} />
-            <div className="absolute w-36 h-36 rounded-full blur-3xl opacity-25 translate-x-10"
-              style={{ background: 'radial-gradient(circle, #3b82f6, transparent)' }} />
-            <div
-              className="relative w-16 h-16 rounded-2xl flex items-center justify-center"
-              style={{
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid rgba(167,139,250,0.35)',
-                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12), 0 0 26px -12px rgba(124,58,237,0.95)',
-              }}
-            >
-              <span className="halo-ring" aria-hidden="true" />
-              <BookOpen size={28} className="relative text-brand-light" />
-            </div>
-          </div>
-          <h2 className="text-lg font-semibold gradient-text mb-2">{APP_NAME}</h2>
-          <p className="text-[11px] tracking-[0.3em] text-gray-700 uppercase mb-2">Langhuan</p>
-          <p className="text-sm text-gray-600 max-w-xs leading-relaxed">
-            从左侧选择知识库，或创建新的知识库并上传 PDF、EPUB、Markdown、TXT 文档
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  if (!activeSession) {
-    return (
-      <div className="relative z-10 flex-1 flex items-center justify-center">
-        <div className="text-center animate-fade-in">
-          <div
-            className="relative w-12 h-12 rounded-xl mx-auto mb-4 flex items-center justify-center"
-            style={{
-              background: 'rgba(255,255,255,0.03)',
-              border: '1px solid rgba(167,139,250,0.32)',
-              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12), 0 0 24px -12px rgba(124,58,237,0.9)',
-            }}
-          >
-            <MessageSquare size={20} className="text-brand-light" />
-          </div>
-          <p className="text-sm font-medium text-gray-400">{activeKB.name}</p>
-          <p className="text-xs text-gray-600 mt-1">点击左侧「新对话」开始提问</p>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="relative z-10 flex-1 flex flex-col overflow-hidden">
-      {/* Header */}
-      <header className="glass-header flex items-center px-6 py-3 shrink-0">
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-200 truncate">
-            {activeSession.title || '新会话'}
-          </p>
-          <p className="text-[11px] text-gray-600 truncate mt-0.5">
-            <span className="text-brand/70">{activeKB.name}</span>
-            <span className="mx-1.5 text-gray-700">·</span>
-            {activeSession.llm_provider}/{activeSession.llm_model_id}
-          </p>
-        </div>
-      </header>
-
-      <ChatWindow sessionId={activeSession.id} />
-    </div>
   )
 }

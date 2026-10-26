@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
-import { Sidebar, MainContent } from './components/layout/Sidebar'
+import { Sidebar } from './components/layout/Sidebar'
+import { MainContent } from './components/layout/MainContent'
 
 export default function App() {
   // 跟随鼠标的环境光：把坐标写进 CSS 变量，由 .cursor-glow 呈现

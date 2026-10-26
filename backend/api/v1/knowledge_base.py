@@ -1,11 +1,13 @@
-import io
+import os
+import tempfile
 import uuid
+from pathlib import Path
 from typing import Annotated, Optional
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from api.deps import get_db, get_kb_or_404, get_qdrant
 from core import transfer
@@ -23,15 +25,12 @@ from vector_store.qdrant_store import QdrantVectorStore
 router = APIRouter(prefix="/knowledge-bases", tags=["Knowledge Base"])
 
 
-def _zip_response(data: bytes, filename: str) -> StreamingResponse:
-    return StreamingResponse(
-        io.BytesIO(data),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-            "X-Archive-Size": str(len(data)),
-        },
-    )
+def _remove_file(path: Path) -> None:
+    """响应发送完毕后清理临时导出文件"""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 @router.post("", response_model=KnowledgeBaseResponse, status_code=status.HTTP_201_CREATED)
@@ -52,18 +51,24 @@ async def create_knowledge_base(
             detail=f"Failed to create Qdrant collection: {e}",
         )
 
-    kb = await crud.create_kb(db, {
-        "id": kb_id,
-        "name": body.name,
-        "description": body.description,
-        "embedding_provider": body.embedding_provider,
-        "embedding_model_id": body.embedding_model_id,
-        "embedding_vector_dim": body.embedding_vector_dim,
-        "embedding_is_multimodal": body.embedding_is_multimodal,
-        "caption_provider": body.caption_provider,
-        "caption_model_id": body.caption_model_id,
-        "qdrant_collection_name": collection_name,
-    })
+    try:
+        kb = await crud.create_kb(db, {
+            "id": kb_id,
+            "name": body.name,
+            "description": body.description,
+            "embedding_provider": body.embedding_provider,
+            "embedding_model_id": body.embedding_model_id,
+            "embedding_vector_dim": body.embedding_vector_dim,
+            "embedding_is_multimodal": body.embedding_is_multimodal,
+            "caption_provider": body.caption_provider,
+            "caption_model_id": body.caption_model_id,
+            "qdrant_collection_name": collection_name,
+        })
+    except Exception:
+        # 入库失败时回滚已建的集合，避免留下孤儿 collection
+        await db.rollback()
+        await qdrant.delete_collection(collection_name)
+        raise
     return kb
 
 
@@ -80,9 +85,16 @@ async def import_knowledge_base(
     name: Optional[str] = None,
 ):
     """导入知识库归档包（含文档、图片、向量库与历史会话）。"""
-    archive = await file.read()
+    # UploadFile 超过阈值会自动落到磁盘临时文件，直接交给 zipfile 读取，不整包进内存
+    max_bytes = transfer.MAX_IMPORT_BYTES
+    if getattr(file, "size", None) and file.size > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="导入包超过 2GB，无法导入",
+        )
+
     try:
-        result = await transfer.import_kb(db, qdrant, archive, name=name)
+        result = await transfer.import_kb(db, qdrant, file.file, name=name)
     except transfer.KnowledgeBaseExists as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except ValueError as e:
@@ -131,10 +143,27 @@ async def export_knowledge_base(
     db: Annotated[AsyncSession, Depends(get_db)],
     qdrant: Annotated[QdrantVectorStore, Depends(get_qdrant)],
 ):
-    """导出知识库：元数据 + 文档 + 图片 + 向量库快照 + 历史会话。"""
-    archive = await transfer.export_kb(db, kb, qdrant)
+    """导出知识库：元数据 + 文档 + 图片 + 向量库快照 + 历史会话。
+
+    先写入临时文件再流式下发，向量库再大也不会撑爆内存。
+    """
     filename = f"{transfer.safe_filename(kb.name, 'knowledge-base')}.kbz.zip"
-    return _zip_response(archive, filename)
+
+    fd, tmp_name = tempfile.mkstemp(prefix="kb-export-", suffix=".zip")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        await transfer.export_kb(db, kb, qdrant, tmp_path)
+    except Exception:
+        _remove_file(tmp_path)
+        raise
+
+    return FileResponse(
+        tmp_path,
+        media_type="application/zip",
+        filename=filename,
+        background=BackgroundTask(_remove_file, tmp_path),
+    )
 
 
 @router.get("/{kb_id}", response_model=KnowledgeBaseResponse)

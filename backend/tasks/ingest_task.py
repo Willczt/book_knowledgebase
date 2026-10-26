@@ -1,11 +1,11 @@
 import asyncio
-from datetime import datetime, timezone
 
 import structlog
 
 from config import get_settings
 from core.embedding.registry import get_embedding_registry
 from core.indexing.indexer import DocumentIndexer
+from db.models import utcnow
 from vector_store.qdrant_store import QdrantVectorStore
 
 logger = structlog.get_logger()
@@ -28,8 +28,8 @@ async def run_ingest_task(
     异步后台摄入任务。
     由 API 层通过 asyncio.create_task() 调用。
     """
-    from db.engine import AsyncSessionLocal
     from db import crud
+    from db.engine import AsyncSessionLocal
     from tasks import liveness
     from tasks import progress as ingest_progress
 
@@ -51,10 +51,13 @@ async def run_ingest_task(
         # 更新状态
         await crud.update_document(db, doc, {
             "status": "processing",
-            "processing_started_at": datetime.now(timezone.utc),
+            "processing_started_at": utcnow(),
         })
         logger.info("🚀 摄入任务开始", doc_id=doc_id, source_doc=source_doc, kb_id=kb_id,
                     embedding_model=kb_embedding_model_id)
+
+    # 客户端在 finally 中统一关闭：失败路径同样会泄漏连接
+    vector_store = QdrantVectorStore()
 
     try:
         # 获取 embedding provider
@@ -68,8 +71,6 @@ async def run_ingest_task(
                 kb_embedding_model_id,
                 kb_embedding_vector_dim,
             )
-
-        vector_store = QdrantVectorStore()
 
         # caption 模型：知识库指定的优先，失败则回退到全局优先级
         caption_llm = None
@@ -114,23 +115,29 @@ async def run_ingest_task(
                     "status": "indexed",
                     "chunk_count": chunk_count,
                     "image_count": image_count,
-                    "processing_completed_at": datetime.now(timezone.utc),
+                    "processing_completed_at": utcnow(),
                     "error_message": None,
                 })
 
-        await vector_store.close()
-
     except Exception as e:
         logger.error("ingest_task_failed", doc_id=doc_id, error=str(e), exc_info=True)
+        # 清掉本次已写入的半截向量，否则重试会产生重复 chunk
+        try:
+            await vector_store.delete_doc_points(kb_qdrant_collection, doc_id)
+        except Exception as cleanup_error:
+            logger.warning(
+                "ingest_rollback_failed", doc_id=doc_id, error=str(cleanup_error)[:300]
+            )
         async with AsyncSessionLocal() as db:
             doc = await crud.get_document(db, doc_id)
             if doc:
                 await crud.update_document(db, doc, {
                     "status": "failed",
                     "error_message": str(e)[:2000],
-                    "processing_completed_at": datetime.now(timezone.utc),
+                    "processing_completed_at": utcnow(),
                 })
     finally:
+        await vector_store.close()
         stop_beat.set()
         beat_task.cancel()
         await asyncio.gather(beat_task, return_exceptions=True)
@@ -147,5 +154,5 @@ async def _heartbeat_loop(doc_id: str, stop: asyncio.Event) -> None:
         try:
             await asyncio.wait_for(stop.wait(), timeout=settings.task_heartbeat_interval)
             return
-        except asyncio.TimeoutError:
+        except TimeoutError:
             liveness.beat(doc_id)

@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
 from sqlalchemy import (
     JSON,
@@ -18,6 +18,15 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 def _uuid() -> str:
     return str(uuid.uuid4())
+
+
+def utcnow() -> datetime:
+    """毫秒级 UTC 时间（naive，与 SQLite CURRENT_TIMESTAMP 保持同一时区语义）。
+
+    消息顺序依赖 created_at：数据库默认值只到秒，同一秒内的问答对会排错，
+    所以这里用 Python 生成带微秒的时间戳。
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):
@@ -117,6 +126,6 @@ class Message(Base):
     sources: Mapped[Optional[list]] = mapped_column(JSON)       # 助手消息的检索来源
     prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer)
     completion_tokens: Mapped[Optional[int]] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     session: Mapped[Session] = relationship("Session", back_populates="messages")

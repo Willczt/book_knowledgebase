@@ -50,9 +50,20 @@ class CrossEncoderReranker:
                         reranked_results.append(original)
                 return reranked_results
 
-            reranked = await asyncio.get_event_loop().run_in_executor(None, _sync_rerank)
+            reranked = await asyncio.to_thread(_sync_rerank)
             return reranked[:top_k] if top_k else reranked
 
         except Exception as e:
             logger.warning("reranker_failed", error=str(e))
             return results
+
+
+_reranker: Optional[CrossEncoderReranker] = None
+
+
+def get_reranker() -> CrossEncoderReranker:
+    """进程内共享的 reranker（模型只加载一次）"""
+    global _reranker
+    if _reranker is None:
+        _reranker = CrossEncoderReranker()
+    return _reranker

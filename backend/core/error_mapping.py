@@ -10,7 +10,7 @@ from typing import Optional
 import httpx
 from tenacity import RetryError
 
-from core.exceptions import LLMProviderUnavailable, EmbeddingProviderUnavailable
+from core.exceptions import EmbeddingProviderUnavailable, LLMProviderUnavailable
 
 try:
     import openai

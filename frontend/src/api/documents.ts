@@ -5,9 +5,9 @@ export const documentsApi = {
   upload: (kbId: string, file: File) => {
     const formData = new FormData()
     formData.append('file', file)
+    // 不要手动设置 Content-Type：需要由浏览器补上 multipart 的 boundary
     return client
       .post<Document>(`/knowledge-bases/${kbId}/documents`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 300_000,
       })
       .then((r) => r.data)
@@ -23,4 +23,10 @@ export const documentsApi = {
 
   delete: (kbId: string, docId: string) =>
     client.delete(`/knowledge-bases/${kbId}/documents/${docId}`),
+
+  // 重建索引：清空向量库或摄入失败后使用
+  reindex: (kbId: string, docId: string) =>
+    client
+      .post<Document>(`/knowledge-bases/${kbId}/documents/${docId}/reindex`)
+      .then((r) => r.data),
 }

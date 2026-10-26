@@ -1,11 +1,10 @@
 import base64
 from typing import AsyncIterator
 
-import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import get_settings
-from core.llm.base import ChatMessage, LLMConfig, LLMProvider, MessageRole
+from core.llm.base import ChatMessage, LLMConfig, LLMProvider
 
 settings = get_settings()
 

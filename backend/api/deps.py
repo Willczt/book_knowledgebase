@@ -4,12 +4,12 @@ from typing import Annotated, Optional
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.embedding.base import EmbeddingProvider
+from core.embedding.registry import EmbeddingRegistry, get_embedding_registry
+from core.exceptions import EmbeddingModelMismatch
 from db.crud import get_kb, get_session_by_id
 from db.engine import get_session
 from db.models import KnowledgeBase, Session
-from core.embedding.base import EmbeddingProvider
-from core.embedding.registry import get_embedding_registry, EmbeddingRegistry
-from core.exceptions import EmbeddingModelMismatch
 from vector_store.qdrant_store import QdrantVectorStore
 
 
@@ -18,8 +18,26 @@ async def get_db() -> AsyncSession:
         yield session
 
 
+# Qdrant 客户端内部维护连接池，必须复用而不是每请求新建，
+# 否则每个请求都会泄漏一个 AsyncQdrantClient（连接 + 文件描述符）。
+_qdrant_store: Optional[QdrantVectorStore] = None
+
+
 def get_qdrant() -> QdrantVectorStore:
-    return QdrantVectorStore()
+    global _qdrant_store
+    if _qdrant_store is None:
+        _qdrant_store = QdrantVectorStore()
+    return _qdrant_store
+
+
+async def close_qdrant() -> None:
+    """应用退出时关闭共享的 Qdrant 客户端"""
+    global _qdrant_store
+    if _qdrant_store is not None:
+        try:
+            await _qdrant_store.close()
+        finally:
+            _qdrant_store = None
 
 
 def get_registry() -> EmbeddingRegistry:

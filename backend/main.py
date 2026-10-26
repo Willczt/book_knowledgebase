@@ -30,6 +30,11 @@ async def lifespan(_app: FastAPI):
 
     logger.info("application_started", storage_root=settings.storage_root)
     yield
+
+    # 关闭共享的 Qdrant 连接池
+    from api.deps import close_qdrant
+
+    await close_qdrant()
     logger.info("application_shutdown")
 
 

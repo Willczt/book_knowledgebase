@@ -40,23 +40,23 @@ async def health_check():
     """
     import asyncio
 
-    from db.engine import engine
-    from qdrant_client import AsyncQdrantClient
+    from sqlalchemy import text
 
+    from api.deps import get_qdrant
     from core import health
+    from db.engine import engine
 
     status = {"db": "ok", "qdrant": "ok"}
 
     try:
         async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+            await conn.execute(text("SELECT 1"))
     except Exception as e:
         status["db"] = f"error: {e}"
 
+    # 复用共享客户端：健康检查每 30s 一次，新建客户端会持续泄漏连接池
     try:
-        client = AsyncQdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
-        await client.get_collections()
-        await client.close()
+        await get_qdrant().client.get_collections()
     except Exception as e:
         status["qdrant"] = f"error: {e}"
 

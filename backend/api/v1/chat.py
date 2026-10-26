@@ -1,59 +1,26 @@
-import asyncio
 import json
 import uuid
 from pathlib import Path
 from typing import Annotated, AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.deps import (
-    decode_base64_image,
-    get_db,
-    get_session_or_404,
-    validate_kb_embedding,
-)
+from api.deps import decode_base64_image, get_db, get_qdrant, get_session_or_404
 from config import get_settings
-from core.embedding.base import EmbeddingProvider
 from core.llm.registry import create_llm_provider
 from core.rag.pipeline import RAGPipeline
-from core.retrieval.reranker import CrossEncoderReranker
+from core.retrieval.reranker import get_reranker
 from core.retrieval.retriever import HybridRetriever
 from db import crud
-from db.models import Session
-from db.schemas import ChatRequest, ChatResponse, SourceChunk
+from db.models import Session, utcnow
+from db.schemas import ChatRequest
+from tasks.background import spawn
 from vector_store.qdrant_store import QdrantVectorStore
-from api.deps import get_qdrant
 
 router = APIRouter(prefix="/sessions", tags=["Chat"])
 settings = get_settings()
-
-
-async def _build_rag_pipeline(
-    session: Session,
-    embedding_provider: EmbeddingProvider,
-    vector_store: QdrantVectorStore,
-    use_reranker: bool = False,
-) -> RAGPipeline:
-    kb_query = await crud.get_kb
-    llm = create_llm_provider(
-        provider=session.llm_provider,
-        model_id=session.llm_model_id,
-        llm_config=session.llm_config,
-    )
-    reranker = CrossEncoderReranker() if use_reranker else None
-    retriever = HybridRetriever(
-        vector_store=vector_store,
-        embedding_provider=embedding_provider,
-        reranker=reranker,
-    )
-    # 需要 KB 对象
-    from db.engine import AsyncSessionLocal
-    async with AsyncSessionLocal() as db:
-        kb = await crud.get_kb(db, session.kb_id)
-
-    return RAGPipeline(retriever=retriever, llm_provider=llm, kb=kb)
 
 
 @router.post("/{session_id}/chat/stream")
@@ -101,7 +68,7 @@ async def stream_chat(
     score_threshold = getattr(retrieval_cfg, "score_threshold", 0.0)
     use_reranker = getattr(retrieval_cfg, "use_reranker", False)
 
-    reranker = CrossEncoderReranker() if use_reranker else None
+    reranker = get_reranker() if use_reranker else None
     retriever = HybridRetriever(
         vector_store=qdrant,
         embedding_provider=embedding_provider,
@@ -152,7 +119,7 @@ async def stream_chat(
                 img_filename = f"{message_id}.png"
                 (img_dir / img_filename).write_bytes(query_image)
                 saved_image_paths = [f"query_images/{img_filename}"]
-            asyncio.create_task(_save_messages(
+            spawn(_save_messages(
                 session_id=session.id,
                 message_id=message_id,
                 user_content=body.content,
@@ -162,7 +129,7 @@ async def stream_chat(
             ))
             # 自动生成会话标题（仅首条消息）
             if not history:
-                asyncio.create_task(_auto_title_session(session.id, body.content))
+                spawn(_auto_title_session(session.id, body.content))
 
     return StreamingResponse(
         event_generator(),
@@ -200,10 +167,12 @@ async def _save_messages(
                 "content": assistant_content,
                 "sources": sources or None,
             })
-        # 更新 session updated_at
+        # 更新 session updated_at（传空字典不会触发 UPDATE，onupdate 也就不会生效）
         session = await crud.get_session_by_id(db, session_id)
         if session:
-            await crud.update_session(db, session, {})
+            await crud.update_session(
+                db, session, {"updated_at": utcnow()}
+            )
 
 
 async def _auto_title_session(session_id: str, first_message: str) -> None:

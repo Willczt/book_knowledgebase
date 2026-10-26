@@ -1,7 +1,7 @@
 import asyncio
+from typing import Optional
 
 import structlog
-from typing import Optional
 
 from core.exceptions import ProviderUnavailable
 from core.llm.base import LLMProvider

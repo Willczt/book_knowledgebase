@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Document, KnowledgeBase, Message, Session
+from db.models import Document, KnowledgeBase, Message, Session, utcnow
 
 # embedding 模型与向量集合在创建后锁定，改名字时不允许顺带改掉
 _KB_IMMUTABLE_FIELDS = {
@@ -117,7 +117,7 @@ async def fail_documents(db: AsyncSession, doc_ids: list[str], message: str) -> 
         .values(
             status="failed",
             error_message=message,
-            processing_completed_at=datetime.now(timezone.utc),
+            processing_completed_at=utcnow(),
         )
     )
     await db.commit()
@@ -197,7 +197,41 @@ async def get_messages(
     session_id: str,
     limit: int = 50,
     offset: int = 0,
+    latest: bool = False,
+    before: Optional[datetime] = None,
 ) -> list[Message]:
+    """读取会话消息。
+
+    - latest=True：返回「最近 limit 条」（仍按时间升序），用于聊天窗口首屏；
+    - before=<时间>：返回该时间之前的最近 limit 条（升序），用于「加载更早」；
+    - 默认：按时间升序分页（导出/后台任务用）。
+    """
+    if before is not None:
+        # 老数据的时间戳由 CURRENT_TIMESTAMP 生成，只到秒；而绑定参数带微秒
+        # （'...:51' vs '...:51.000000'），直接比较会把边界消息重复算进上一页。
+        before = before - timedelta(microseconds=1)
+        role_order = case((Message.role == "user", 0), else_=1)
+        result = await db.execute(
+            select(Message)
+            .where(
+                Message.session_id == session_id,
+                Message.created_at < before,
+            )
+            .order_by(Message.created_at.desc(), role_order.desc())
+            .limit(limit)
+        )
+        return list(reversed(list(result.scalars().all())))
+
+    if latest:
+        role_order = case((Message.role == "user", 0), else_=1)
+        result = await db.execute(
+            select(Message)
+            .where(Message.session_id == session_id)
+            .order_by(Message.created_at.desc(), role_order.desc())
+            .limit(limit)
+        )
+        return list(reversed(list(result.scalars().all())))
+
     result = await db.execute(
         select(Message)
         .where(Message.session_id == session_id)

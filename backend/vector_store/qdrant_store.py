@@ -5,17 +5,17 @@ from typing import Any, Optional
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Distance,
+    FieldCondition,
+    Filter,
     Fusion,
     FusionQuery,
-    Prefetch,
+    MatchValue,
     PointStruct,
+    Prefetch,
     SparseIndexParams,
     SparseVector,
     SparseVectorParams,
     VectorParams,
-    Filter,
-    FieldCondition,
-    MatchValue,
 )
 
 from config import get_settings
@@ -225,13 +225,15 @@ class QdrantVectorStore:
         except Exception:
             return 0
 
-    async def scroll_all(self, collection_name: str, batch_size: int = 256) -> list[dict]:
-        """导出用：逐页拉取集合内所有点（含向量与 payload），序列化为纯 Python 结构。"""
-        points: list[dict] = []
+    async def iter_points(self, collection_name: str, batch_size: int = 256):
+        """导出用：逐页流式产出所有点（含向量与 payload）。
+
+        大库导出时不要用 scroll_all，否则会把全部向量一次性读进内存。
+        """
         offset: Any = None
         exists = await self.client.collection_exists(collection_name)
         if not exists:
-            return points
+            return
         while True:
             records, offset = await self.client.scroll(
                 collection_name=collection_name,
@@ -241,14 +243,17 @@ class QdrantVectorStore:
                 with_vectors=True,
             )
             for record in records:
-                points.append({
+                yield {
                     "id": str(record.id),
                     "vector": _dump_vector(record.vector),
                     "payload": dict(record.payload or {}),
-                })
+                }
             if offset is None:
                 break
-        return points
+
+    async def scroll_all(self, collection_name: str, batch_size: int = 256) -> list[dict]:
+        """收集全部点（小集合/测试用；大库请用 iter_points 流式处理）。"""
+        return [point async for point in self.iter_points(collection_name, batch_size)]
 
     async def upsert_raw(self, collection_name: str, points: list[dict]) -> int:
         """导入用：写入 scroll_all() 导出的原始点结构，返回写入数量。"""

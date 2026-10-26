@@ -1,8 +1,9 @@
 """知识库 / 会话的导入导出。
 
 导出包是一个 zip：
-    manifest.json     元数据（KB 配置、文档列表、会话与消息）
-    vectors.json      向量库快照（scroll_all 的原始点，含 dense + sparse）
+    manifest.json     元数据（KB 配置、文档列表、统计信息）
+    vectors.ndjson    向量库快照（一行一个点，含 dense + sparse）
+    sessions.ndjson   会话与消息（一行一个会话，内含其消息列表）
     files/docs/...    原始文档
     files/images/...  文档内提取的图片（按 doc_id 分目录）
     files/query_images/...  历史会话里用户上传的图片
@@ -32,12 +33,17 @@ from vector_store.qdrant_store import QdrantVectorStore
 
 settings = get_settings()
 
-ARCHIVE_VERSION = 1
+ARCHIVE_VERSION = 2
 MANIFEST_NAME = "manifest.json"
-VECTORS_NAME = "vectors.json"
+# 归档格式 v2：向量与会话改为 NDJSON（一行一个对象），可流式读写；
+# 导入时仍兼容旧包里的 vectors.json 与 manifest.sessions。
+VECTORS_NAME = "vectors.ndjson"
+SESSIONS_NAME = "sessions.ndjson"
+LEGACY_VECTORS_NAME = "vectors.json"
 MAX_IMPORT_BYTES = 2 * 1024 * 1024 * 1024  # 2GB
 
 _PENDING_STATUSES = ("pending", "processing")
+_IMPORT_BATCH_SIZE = 256  # 导入向量时的批大小
 
 
 class KnowledgeBaseExists(ValueError):
@@ -91,13 +97,38 @@ def _write_file(zf: zipfile.ZipFile, name: str, path: Path) -> None:
     zf.write(path, name, compress_type=zipfile.ZIP_STORED)
 
 
-def _read_manifest(archive: bytes, expected_kind: str) -> tuple[zipfile.ZipFile, dict, set[str]]:
-    if not archive:
-        raise ValueError("导入包为空")
-    if len(archive) > MAX_IMPORT_BYTES:
-        raise ValueError("导入包超过 2GB，无法导入")
+def _iter_ndjson(stream: Any, error_message: str):
+    """逐行解析 NDJSON：空行跳过，格式错误抛 ValueError。
+
+    边读边解析，不会把整个条目读进内存。
+    """
+    for raw in stream:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(error_message) from exc
+
+
+def _read_manifest(archive: Any, expected_kind: str) -> tuple[zipfile.ZipFile, dict, set[str]]:
+    """archive 可以是 bytes，也可以是已落盘的类文件对象（UploadFile.file）。"""
+    if isinstance(archive, (bytes, bytearray)):
+        if not archive:
+            raise ValueError("导入包为空")
+        if len(archive) > MAX_IMPORT_BYTES:
+            raise ValueError("导入包超过 2GB，无法导入")
+        source: Any = io.BytesIO(archive)
+    else:
+        source = archive
+        try:
+            source.seek(0)
+        except (AttributeError, OSError):
+            pass
+
     try:
-        zf = zipfile.ZipFile(io.BytesIO(archive))
+        zf = zipfile.ZipFile(source)
     except zipfile.BadZipFile as exc:
         raise ValueError("导入包不是有效的 zip 文件") from exc
 
@@ -178,7 +209,17 @@ async def _unique_kb_name(db: AsyncSession, base: str) -> str:
 # 导出：知识库
 # ========================
 
-async def export_kb(db: AsyncSession, kb: KnowledgeBase, qdrant: QdrantVectorStore) -> bytes:
+async def export_kb(
+    db: AsyncSession,
+    kb: KnowledgeBase,
+    qdrant: QdrantVectorStore,
+    target: Optional[Path] = None,
+) -> Any:
+    """导出知识库为 zip。
+
+    target 为文件路径时直接写入该文件（内存占用与库大小无关），返回统计信息；
+    target 为 None 时返回 bytes（仅建议测试/小库使用）。
+    """
     docs = await crud.list_documents(db, kb.id)
     sessions = await crud.list_sessions(db, kb.id)
     images_root = _images_root()
@@ -214,51 +255,65 @@ async def export_kb(db: AsyncSession, kb: KnowledgeBase, qdrant: QdrantVectorSto
             }
             for doc in docs
         ],
-        "sessions": [],
     }
 
-    message_images: set[str] = set()
-    for session in sessions:
-        messages = await crud.get_messages(db, session.id, limit=1_000_000, offset=0)
-        manifest["sessions"].append({
-            "id": session.id,
-            "title": session.title,
-            "llm_provider": session.llm_provider,
-            "llm_model_id": session.llm_model_id,
-            "llm_config": session.llm_config,
-            "created_at": _iso(session.created_at),
-            "updated_at": _iso(session.updated_at),
-            "messages": [
-                {
-                    "id": msg.id,
-                    "role": msg.role,
-                    "content": msg.content,
-                    "image_paths": msg.image_paths,
-                    "sources": msg.sources,
-                    "prompt_tokens": msg.prompt_tokens,
-                    "completion_tokens": msg.completion_tokens,
-                    "created_at": _iso(msg.created_at),
+    sink = target if target is not None else io.BytesIO()
+    with zipfile.ZipFile(sink, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        # 1) 向量库可能很大：从 Qdrant 边读边写，避免整库向量进内存
+        vector_count = 0
+        with zf.open(VECTORS_NAME, "w", force_zip64=True) as entry:
+            async for point in qdrant.iter_points(kb.qdrant_collection_name):
+                entry.write(json.dumps(point, ensure_ascii=False).encode("utf-8") + b"\n")
+                vector_count += 1
+
+        # 2) 会话：一次只装载一个会话的消息，内存占用与「最大的那个会话」相关，
+        #    而不是随全部历史消息线性增长
+        message_images: set[str] = set()
+        session_count = 0
+        message_count = 0
+        with zf.open(SESSIONS_NAME, "w", force_zip64=True) as entry:
+            for session in sessions:
+                messages = await crud.get_messages(
+                    db, session.id, limit=1_000_000, offset=0
+                )
+                payload = {
+                    "id": session.id,
+                    "title": session.title,
+                    "llm_provider": session.llm_provider,
+                    "llm_model_id": session.llm_model_id,
+                    "llm_config": session.llm_config,
+                    "created_at": _iso(session.created_at),
+                    "updated_at": _iso(session.updated_at),
+                    "messages": [
+                        {
+                            "id": msg.id,
+                            "role": msg.role,
+                            "content": msg.content,
+                            "image_paths": msg.image_paths,
+                            "sources": msg.sources,
+                            "prompt_tokens": msg.prompt_tokens,
+                            "completion_tokens": msg.completion_tokens,
+                            "created_at": _iso(msg.created_at),
+                        }
+                        for msg in messages
+                    ],
                 }
-                for msg in messages
-            ],
-        })
-        for msg in messages:
-            for rel in msg.image_paths or []:
-                if isinstance(rel, str):
-                    message_images.add(rel)
+                entry.write(json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n")
+                session_count += 1
+                message_count += len(messages)
+                for msg in messages:
+                    for rel in msg.image_paths or []:
+                        if isinstance(rel, str):
+                            message_images.add(rel)
 
-    vectors = await qdrant.scroll_all(kb.qdrant_collection_name)
-    manifest["stats"] = {
-        "documents": len(docs),
-        "sessions": len(manifest["sessions"]),
-        "messages": sum(len(s["messages"]) for s in manifest["sessions"]),
-        "vectors": len(vectors),
-    }
-
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        # 3) manifest 放到最后写，此时统计信息才完整
+        manifest["stats"] = {
+            "documents": len(docs),
+            "sessions": session_count,
+            "messages": message_count,
+            "vectors": vector_count,
+        }
         _write_json(zf, MANIFEST_NAME, manifest)
-        _write_json(zf, VECTORS_NAME, vectors)
 
         for doc in docs:
             path = Path(doc.file_path)
@@ -280,7 +335,10 @@ async def export_kb(db: AsyncSession, kb: KnowledgeBase, qdrant: QdrantVectorSto
             if source.is_file():
                 _write_file(zf, f"files/{rel}", source)
 
-    return buffer.getvalue()
+    # 写入文件时返回统计信息；传 None 时保持旧行为（返回 bytes，便于测试）
+    if target is None:
+        return sink.getvalue()
+    return manifest["stats"]
 
 
 # ========================
@@ -290,7 +348,7 @@ async def export_kb(db: AsyncSession, kb: KnowledgeBase, qdrant: QdrantVectorSto
 async def import_kb(
     db: AsyncSession,
     qdrant: QdrantVectorStore,
-    archive: bytes,
+    archive: Any,
     name: Optional[str] = None,
 ) -> dict:
     zf, manifest, names = _read_manifest(archive, "knowledge_base")
@@ -367,7 +425,10 @@ async def import_kb(
             for name_in_zip in names:
                 if not name_in_zip.startswith(prefix) or name_in_zip.endswith("/"):
                     continue
-                filename = name_in_zip[len(prefix):]
+                # 只取文件名部分，防止归档里的 ../ 写到目录外
+                filename = Path(name_in_zip[len(prefix):]).name
+                if not filename or filename in (".", ".."):
+                    continue
                 target = images_root / kb_id / new_id / filename
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(zf.read(name_in_zip))
@@ -401,63 +462,94 @@ async def import_kb(
             })
 
         # ---------- 向量 ----------
-        vectors: list[dict] = []
-        if VECTORS_NAME in names:
-            try:
-                vectors = json.loads(zf.read(VECTORS_NAME).decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise ValueError("vectors.json 解析失败") from exc
-
+        # 边读边写：内存占用只跟批大小有关，与归档里的向量总量无关
         source_kb_id = manifest.get("source_kb_id") or ""
-        remapped_points: list[dict] = []
-        for point in vectors:
+        written_vectors = 0
+        pending: list[dict] = []
+
+        def _remap_point(point: dict) -> Optional[dict]:
             payload = dict(point.get("payload") or {})
             old_doc = payload.get("doc_id")
             if old_doc and old_doc not in doc_map:
-                continue
+                return None
             if old_doc:
                 payload["doc_id"] = doc_map[old_doc]
             if payload.get("image_path"):
                 payload["image_path"] = _remap_image_path(
                     payload["image_path"], source_kb_id, kb_id, doc_map
                 )
-            remapped_points.append({
+            return {
                 "id": _uid(),
                 "vector": point.get("vector") or {},
                 "payload": payload,
-            })
-        written_vectors = await qdrant.upsert_raw(collection_name, remapped_points)
+            }
+
+        async def _flush_vectors() -> None:
+            nonlocal written_vectors
+            if not pending:
+                return
+            written_vectors += await qdrant.upsert_raw(collection_name, pending)
+            pending.clear()
+
+        async def _consume_points(points: Any) -> None:
+            for point in points:
+                if not isinstance(point, dict):
+                    continue
+                remapped = _remap_point(point)
+                if remapped is None:
+                    continue
+                pending.append(remapped)
+                if len(pending) >= _IMPORT_BATCH_SIZE:
+                    await _flush_vectors()
+
+        if VECTORS_NAME in names:
+            with zf.open(VECTORS_NAME) as entry:
+                await _consume_points(_iter_ndjson(entry, "vectors.ndjson 解析失败"))
+        elif LEGACY_VECTORS_NAME in names:
+            try:
+                legacy_points = json.loads(zf.read(LEGACY_VECTORS_NAME).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("vectors.json 解析失败") from exc
+            await _consume_points(legacy_points or [])
+        await _flush_vectors()
 
         # ---------- 会话与消息 ----------
+        # 一次只处理一行（一个会话），内存占用与单个会话的消息数相关
         session_count = 0
         message_count = 0
         query_images_dir = images_root / "query_images"
+        pending_images: list[tuple[str, Path]] = []
 
-        for session in manifest.get("sessions") or []:
+        async def _import_session(payload: dict) -> None:
+            nonlocal session_count, message_count
             new_session_id = _uid()
             await crud.create_session(db, {
                 "id": new_session_id,
                 "kb_id": kb_id,
-                "title": session.get("title"),
-                "llm_provider": session.get("llm_provider") or meta.get("embedding_provider"),
-                "llm_model_id": session.get("llm_model_id") or meta.get("embedding_model_id"),
-                "llm_config": session.get("llm_config"),
-                "created_at": _parse_dt(session.get("created_at")) or datetime.now(),
-                "updated_at": _parse_dt(session.get("updated_at")) or datetime.now(),
+                "title": payload.get("title"),
+                "llm_provider": payload.get("llm_provider") or meta.get("embedding_provider"),
+                "llm_model_id": payload.get("llm_model_id") or meta.get("embedding_model_id"),
+                "llm_config": payload.get("llm_config"),
+                "created_at": _parse_dt(payload.get("created_at")) or datetime.now(),
+                "updated_at": _parse_dt(payload.get("updated_at")) or datetime.now(),
             })
             session_count += 1
 
-            for message in session.get("messages") or []:
+            for message in payload.get("messages") or []:
+                if not isinstance(message, dict):
+                    continue
                 new_message_id = _uid()
                 image_paths: list[str] = []
                 for rel in message.get("image_paths") or []:
-                    entry = f"files/{rel}"
-                    if entry not in names:
+                    entry_name = f"files/{rel}"
+                    if entry_name not in names:
                         continue
                     suffix = Path(rel).suffix or ".png"
                     dest_rel = f"query_images/{new_message_id}{suffix}"
                     query_images_dir.mkdir(parents=True, exist_ok=True)
-                    (images_root / dest_rel).write_bytes(zf.read(entry))
+                    # 先登记，等 NDJSON 流读完后统一落盘：
+                    # 同一个 zip 上不宜同时开着流式读取再 read 别的条目
+                    pending_images.append((entry_name, images_root / dest_rel))
                     image_paths.append(dest_rel)
 
                 await crud.create_message(db, {
@@ -474,6 +566,20 @@ async def import_kb(
                     "created_at": _parse_dt(message.get("created_at")) or datetime.now(),
                 })
                 message_count += 1
+
+        if SESSIONS_NAME in names:
+            with zf.open(SESSIONS_NAME) as entry:
+                for payload in _iter_ndjson(entry, "sessions.ndjson 解析失败"):
+                    if isinstance(payload, dict):
+                        await _import_session(payload)
+        else:
+            # v1 归档：会话与消息都塞在 manifest 里
+            for payload in manifest.get("sessions") or []:
+                if isinstance(payload, dict):
+                    await _import_session(payload)
+
+        for entry_name, dest in pending_images:
+            dest.write_bytes(zf.read(entry_name))
 
     return {
         "kb": kb,

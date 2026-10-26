@@ -16,20 +16,15 @@ from core.parsers.epub_parser import EPUBParser
 from core.parsers.markdown_parser import MarkdownParser
 from core.parsers.pdf_parser import PDFParser
 from core.parsers.txt_parser import TXTParser
-from vector_store.qdrant_store import ChunkPoint, QdrantVectorStore
+from core.retrieval.sparse import embed_sparse
 from db.models import KnowledgeBase
+from vector_store.qdrant_store import ChunkPoint, QdrantVectorStore
 
 logger = structlog.get_logger()
 settings = get_settings()
 
 # 进度回调：接收 {stage, stage_label, percent, current, total, message}
 ProgressCallback = Callable[[dict], None]
-
-
-def _get_sparse_encoder():
-    """延迟初始化 FastEmbed BM25 稀疏编码器"""
-    from fastembed import SparseTextEmbedding
-    return SparseTextEmbedding(model_name="Qdrant/bm25")
 
 
 class DocumentIndexer:
@@ -57,7 +52,6 @@ class DocumentIndexer:
         # 知识库可指定 caption 模型，未指定时按全局优先级选择
         caption_llm = caption_provider if caption_provider is not None else get_caption_provider()
         self._captioner = ImageCaptioner(caption_llm)
-        self._sparse_encoder = _get_sparse_encoder()
 
     def _get_parser(self, file_path: str):
         if PDFParser.supports(file_path):
@@ -276,18 +270,13 @@ class DocumentIndexer:
             progress, "sparse", "生成稀疏向量", 82,
             current=None, total=total_chunks, message="生成 BM25 稀疏向量…",
         )
-        sparse_results = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: list(self._sparse_encoder.embed(texts, batch_size=32)),
-        )
+        sparse_results = await asyncio.to_thread(embed_sparse, texts, 32)
         logger.info("✅ 稀疏向量完成", count=len(sparse_results))
 
         # 组装向量
         for i, point in enumerate(chunk_points):
             point.dense_vector = dense_vectors[i]
-            sparse = sparse_results[i]
-            point.sparse_indices = sparse.indices.tolist()
-            point.sparse_values = sparse.values.tolist()
+            point.sparse_indices, point.sparse_values = sparse_results[i]
 
         # ── 阶段 5：写入 Qdrant ──────────────────────────────────────
         upsert_batch = 64

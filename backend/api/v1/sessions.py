@@ -1,6 +1,7 @@
 import io
 import uuid
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -130,6 +131,16 @@ async def get_messages(
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = 1,
     page_size: int = 50,
+    latest: bool = False,
+    before: Optional[datetime] = None,
 ):
+    """latest=true 取最近 page_size 条；before=<ISO 时间> 取该时间之前的一页。"""
     offset = (page - 1) * page_size
-    return await crud.get_messages(db, session.id, limit=page_size, offset=offset)
+    return await crud.get_messages(
+        db,
+        session.id,
+        limit=page_size,
+        offset=offset,
+        latest=latest,
+        before=before,
+    )

@@ -63,7 +63,26 @@ packages = ["backend", "cli"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+exclude = [".venv", "storage", "db/migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "B", "UP"]
-ignore = ["E501", "B008"]
+# 说明：以下规则属于「历史代码待清理」，不阻塞新代码；
+# 清理完可逐条从 ignore 中移除（避免一次性大范围改写引入风险）。
+ignore = [
+    "E501",   # 行宽由 formatter 处理
+    "B008",   # FastAPI 依赖注入默认值写法
+    "B904",   # 异常链：历史 API 层未补 from e
+    "B007",   # 循环变量未使用
+    "B027",   # 空基类方法
+    "N818",   # 异常类命名后缀
+    "UP035",  # 保持 typing.Optional 写法，暂不做全量改写
+    "UP042",  # str 枚举
+    "UP045",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]

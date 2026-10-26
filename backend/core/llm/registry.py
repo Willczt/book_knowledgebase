@@ -5,8 +5,8 @@ import structlog
 from config import get_settings
 from core.exceptions import LLMProviderNotConfigured
 from core.llm.base import LLMConfig, LLMProvider
-from core.llm.doubao import DoubaoLLM
 from core.llm.deepseek import DeepSeekLLM
+from core.llm.doubao import DoubaoLLM
 from core.llm.ollama import OllamaLLM
 from core.llm.vllm import VLLMLLM
 from db.schemas import LLMProviderInfo
