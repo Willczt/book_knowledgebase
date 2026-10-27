@@ -163,6 +163,8 @@ class MessageResponse(BaseModel):
 class RetrievalConfig(BaseModel):
     top_k: int = Field(default=8, ge=1, le=50)
     score_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    # 精排后阈值：rerank 分（0~1 相关度）低于此值视为不可信并丢弃；0 表示不过滤
+    min_rerank_score: float = Field(default=0.0, ge=0.0, le=1.0)
     # None = 跟随服务端全局开关（RERANK_ENABLED，默认开启）
     use_reranker: Optional[bool] = None
     # 精排候选池大小：调试时临时调大/调小，对比召回质量
@@ -203,6 +205,8 @@ class SearchRequest(BaseModel):
     image: Optional[str] = None
     top_k: int = Field(default=8, ge=1, le=50)
     score_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    # 精排后阈值：rerank 分（0~1 相关度）低于此值视为不可信并丢弃；0 表示不过滤
+    min_rerank_score: float = Field(default=0.0, ge=0.0, le=1.0)
     # None = 跟随服务端全局开关（RERANK_ENABLED，默认开启）
     use_reranker: Optional[bool] = None
     rerank_candidates: Optional[int] = Field(default=None, ge=2, le=200)

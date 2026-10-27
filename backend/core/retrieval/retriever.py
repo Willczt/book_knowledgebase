@@ -25,7 +25,10 @@ class RetrievalQuery:
     sparse_indices: list[int]
     sparse_values: list[float]
     top_k: int = 10
+    # 召回层阈值：作用于 RRF 融合分（量级约 0.3~1.0，与语义相似度无关），精排前过滤
     score_threshold: float = 0.0
+    # 精排层阈值：作用于 rerank 分（0~1 的相关度），精排后过滤；0 表示不过滤
+    min_rerank_score: float = 0.0
     doc_ids_filter: Optional[list[str]] = None
     # 精排候选池大小（None 跟随全局配置），调试时可临时调整对比效果
     rerank_candidates: Optional[int] = None
@@ -57,6 +60,7 @@ class HybridRetriever:
         query_image: Optional[bytes] = None,
         top_k: int = 10,
         score_threshold: float = 0.0,
+        min_rerank_score: float = 0.0,
         rerank_candidates: Optional[int] = None,
         trace: Optional["QueryTrace"] = None,
     ) -> RetrievalQuery:
@@ -87,6 +91,7 @@ class HybridRetriever:
                     "params": {
                         "top_k": top_k,
                         "score_threshold": score_threshold,
+                        "min_rerank_score": min_rerank_score,
                         "rerank_candidates": rerank_candidates or settings.rerank_candidates,
                         "embedding_provider": provider_name,
                         "embedding_model": model_id,
@@ -119,6 +124,7 @@ class HybridRetriever:
             sparse_values=values,
             top_k=top_k,
             score_threshold=score_threshold,
+            min_rerank_score=min_rerank_score,
             rerank_candidates=rerank_candidates,
         )
 
@@ -204,6 +210,43 @@ class HybridRetriever:
                 reason=reason,
             )
 
+        # 精排后阈值：只有 rerank 分是 0~1 的相关度，用它做「可信度下限」才有意义。
+        # 没有精排分时（rerank 关闭/服务失败）不做这层过滤，避免把「无分数」当成「低分」
+        rerank_filtered: list[SearchResult] = []
+        if query.min_rerank_score > 0:
+            has_rerank_score = any(r.rerank_score is not None for r in results)
+            if has_rerank_score:
+                rerank_filtered = [
+                    r
+                    for r in results
+                    if (r.rerank_score if r.rerank_score is not None else 0.0)
+                    < query.min_rerank_score
+                ]
+                results = [
+                    r
+                    for r in results
+                    if (r.rerank_score if r.rerank_score is not None else 0.0)
+                    >= query.min_rerank_score
+                ]
+                if trace is not None and trace.on("rerank"):
+                    trace.update(
+                        "rerank",
+                        {
+                            "min_rerank_score": query.min_rerank_score,
+                            "filtered_by_threshold": len(rerank_filtered),
+                            "kept_after_threshold": len(results),
+                        },
+                    )
+            elif trace is not None and trace.on("rerank"):
+                trace.update(
+                    "rerank",
+                    {
+                        "min_rerank_score": query.min_rerank_score,
+                        "filtered_by_threshold": 0,
+                        "threshold_note": "本次没有 rerank 分（精排关闭或失败），精排阈值未生效",
+                    },
+                )
+
         final = results[: query.top_k]
         dropped = results[query.top_k:]
 
@@ -218,6 +261,7 @@ class HybridRetriever:
                         "search_top_k": search_top_k,
                         "prefetch_limit": prefetch_limit,
                         "score_threshold": query.score_threshold,
+                        "min_rerank_score": query.min_rerank_score,
                         "use_reranker": rerank_enabled,
                         "rerank_candidates": rerank_candidates,
                         "doc_ids_filter": query.doc_ids_filter,
@@ -225,6 +269,8 @@ class HybridRetriever:
                     "candidate_count": candidate_count,
                     "filtered_count": len(filtered_out),
                     "threshold": query.score_threshold,
+                    "rerank_filtered_count": len(rerank_filtered),
+                    "min_rerank_score": query.min_rerank_score,
                     "returned": len(final),
                     "fusion": data.get("fusion"),
                     # 本系统未做检索结果缓存，明确记录以免误判
@@ -254,6 +300,10 @@ class HybridRetriever:
                     *(
                         self._trace_row(r, data, False, "below_score_threshold", None)
                         for r in filtered_out
+                    ),
+                    *(
+                        self._trace_row(r, data, False, "below_rerank_threshold", None)
+                        for r in rerank_filtered
                     ),
                 ],
             )

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from sqlalchemy import inspect, text
@@ -5,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from config import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # 确保 SQLite 存储目录存在
@@ -81,5 +83,22 @@ async def dispose_db() -> None:
 
 
 async def get_session() -> AsyncSession:
-    async with AsyncSessionLocal() as session:
+    """请求级会话。
+
+    不用 `async with`：SSE 场景下客户端断开时，请求会被取消，而依赖清理正好
+    撞上 SQLAlchemy 的 greenlet 切换，`close()` 会抛 IllegalStateChangeError，
+    连接不归还连接池，几次之后池被占满、整个服务假死（实测复现）。
+    这里显式关闭并在失败时 invalidate，保证连接一定被丢弃或归还。
+    """
+    session = AsyncSessionLocal()
+    try:
         yield session
+    finally:
+        try:
+            await session.close()
+        except Exception:  # 取消/中断导致的清理异常，不允许冒泡到请求层
+            logger.warning("db_session_close_failed", exc_info=True)
+            try:
+                await session.invalidate()
+            except Exception:
+                logger.warning("db_session_invalidate_failed", exc_info=True)

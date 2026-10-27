@@ -207,7 +207,10 @@ export interface StageMetric {
 export interface SearchDebugRequest {
   query: string
   top_k: number
+  /** 召回阈值：作用于 RRF 融合分（与语义相似度无关） */
   score_threshold: number
+  /** 精排阈值：作用于 rerank 分（0~1 相关度），0 表示不过滤 */
+  min_rerank_score: number
   use_reranker: boolean
   rerank_candidates: number
 }

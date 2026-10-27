@@ -58,3 +58,11 @@ htmlcov/
 # Alembic
 backend/db/migrations/versions/*.py
 !backend/db/migrations/versions/.gitkeep
+
+# 面试准备笔记（仅本地保留，禁止提交/推送）
+docs/INTERVIEW_PREP.md
+docs/interview_prep*.md
+docs/INTERVIEW_NOTES*.md
+
+# 评测产物（dataset.jsonl 入库，报告/逐条明细不入库）
+eval/reports/

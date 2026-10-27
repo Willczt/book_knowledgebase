@@ -68,6 +68,7 @@ async def search(
         query_image=query_image,
         top_k=body.top_k,
         score_threshold=body.score_threshold,
+        min_rerank_score=body.min_rerank_score,
         rerank_candidates=body.rerank_candidates,
         trace=trace,
     )

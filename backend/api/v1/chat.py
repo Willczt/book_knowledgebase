@@ -67,6 +67,8 @@ async def stream_chat(
     retrieval_cfg = body.retrieval_config
     top_k = retrieval_cfg.top_k if retrieval_cfg else settings.default_top_k
     score_threshold = retrieval_cfg.score_threshold if retrieval_cfg else 0.0
+    # 精排后阈值（0~1 相关度），默认 0 表示不过滤
+    min_rerank_score = retrieval_cfg.min_rerank_score if retrieval_cfg else 0.0
     # 请求里没显式指定时跟随全局开关（RERANK_ENABLED，默认开启）
     use_reranker = (
         retrieval_cfg.use_reranker
@@ -113,6 +115,7 @@ async def stream_chat(
                 query_image=query_image,
                 top_k=top_k,
                 score_threshold=score_threshold,
+                min_rerank_score=min_rerank_score,
                 use_reranker=use_reranker,
                 rerank_candidates=rerank_candidates,
                 trace=trace,

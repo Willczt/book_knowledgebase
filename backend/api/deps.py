@@ -14,8 +14,14 @@ from vector_store.qdrant_store import QdrantVectorStore
 
 
 async def get_db() -> AsyncSession:
-    async for session in get_session():
+    # 显式 aclose：SSE 请求被取消时，`async for` 的隐式关闭路径可能被跳过，
+    # 导致 session 不归还连接池（get_session 里另有异常兜底）
+    generator = get_session()
+    try:
+        session = await anext(generator)
         yield session
+    finally:
+        await generator.aclose()
 
 
 # Qdrant 客户端内部维护连接池，必须复用而不是每请求新建，

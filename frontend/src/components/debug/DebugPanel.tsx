@@ -51,6 +51,7 @@ export function DebugPanel({ onClose }: DebugPanelProps) {
   const [queryText, setQueryText] = useState('')
   const [topK, setTopK] = useState(8)
   const [threshold, setThreshold] = useState(0)
+  const [minRerankScore, setMinRerankScore] = useState(0)
   const [useReranker, setUseReranker] = useState(true)
   const [rerankCandidates, setRerankCandidates] = useState(30)
 
@@ -103,6 +104,7 @@ export function DebugPanel({ onClose }: DebugPanelProps) {
         query: queryText.trim(),
         top_k: topK,
         score_threshold: threshold,
+        min_rerank_score: minRerankScore,
         use_reranker: useReranker,
         rerank_candidates: rerankCandidates,
       }),
@@ -216,7 +218,7 @@ export function DebugPanel({ onClose }: DebugPanelProps) {
                     />
                   </label>
                   <label className="text-[10px] text-gray-600">
-                    阈值
+                    召回阈值
                     <input
                       type="number"
                       min={0}
@@ -225,6 +227,20 @@ export function DebugPanel({ onClose }: DebugPanelProps) {
                       value={threshold}
                       onChange={(e) => setThreshold(Number(e.target.value))}
                       className="input-base w-full text-[11px] py-1 mt-0.5"
+                      title="作用于 RRF 融合分（量级 0.3~1.0，与语义相似度无关），精排前过滤"
+                    />
+                  </label>
+                  <label className="text-[10px] text-gray-600">
+                    精排阈值
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={minRerankScore}
+                      onChange={(e) => setMinRerankScore(Number(e.target.value))}
+                      className="input-base w-full text-[11px] py-1 mt-0.5"
+                      title="作用于 rerank 分（0~1 相关度），低于此值视为不可信并丢弃；0 表示不过滤"
                     />
                   </label>
                   <label className="text-[10px] text-gray-600">
