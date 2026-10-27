@@ -315,7 +315,9 @@ class RAGPipeline:
         # 1. 检索前先补全指代："二者矛盾体现在哪里？" → "曾国藩和李鸿章的矛盾体现在哪里？"
         with span(trace, "query_rewrite"):
             retrieval_query, rewrite_method = await rewrite_query(
-                self._get_rewrite_llm() if settings.query_rewrite == "llm" else None,
+                self._get_rewrite_llm()
+                if (settings.query_rewrite or "").lower() == "llm"
+                else None,
                 history_messages,
                 query_text,
             )

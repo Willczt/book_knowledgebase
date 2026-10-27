@@ -65,12 +65,18 @@ class Case:
 
 def load_dataset(path: Path) -> list[Case]:
     cases: list[Case] = []
+    skipped = 0
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
             if not line:
                 continue
             row = json.loads(line)
+            # 人工判定为"不可检索"的题（依赖上下文指代）保留在文件里但跳过，
+            # 这样既能追溯为什么剔除，又不污染指标
+            if row.get("excluded"):
+                skipped += 1
+                continue
             cases.append(
                 Case(
                     id=row.get("id") or f"q{len(cases) + 1:03d}",
@@ -82,6 +88,8 @@ def load_dataset(path: Path) -> list[Case]:
                     expected_refusal=bool(row.get("expected_refusal")) or row.get("type") == "no_answer",
                 )
             )
+    if skipped:
+        print(f"  跳过 {skipped} 条标记为 excluded 的题（人工判定不可检索）")
     return cases
 
 
@@ -268,8 +276,19 @@ async def run_retrieval(
             }
             for r in misses
         ],
+        # 保存完整排名（而非前 10）：丢失名次就无法区分「没召回到」和「排到 30 名外」
         "rows": [
-            {"id": r["case"].id, "type": r["case"].type, "hit_1": r["hit_1"], "recall_10": r["recall_10"], "ranked": r["ranked"][:10]}
+            {
+                "id": r["case"].id,
+                "type": r["case"].type,
+                "hit_1": r["hit_1"],
+                "recall_10": r["recall_10"],
+                "gold_rank": next(
+                    (i for i, cid in enumerate(r["ranked"], 1) if cid in set(r["case"].gold_chunk_ids)),
+                    None,
+                ),
+                "ranked": r["ranked"],
+            }
             for r in scored
         ],
     }

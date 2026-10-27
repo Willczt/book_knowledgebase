@@ -111,6 +111,12 @@ class Settings(BaseSettings):
     query_rewrite: str = "llm"
     query_rewrite_max_tokens: int = 2048
 
+    # 多跳问题拆解：把「比较 A 和 B」拆成多个子查询分别检索再融合
+    # off = 关闭；auto = 只在检测到比较/并列/多主体时拆；always = 每条都让 LLM 判断
+    query_decompose: str = "auto"
+    query_decompose_max_subqueries: int = 3
+    query_decompose_max_tokens: int = 1024
+
     # Rerank（检索结果二次排序）
     # 默认开启：召回 rerank_candidates 条候选，用 rerank 模型精排后截断到 top_k
     rerank_enabled: bool = True

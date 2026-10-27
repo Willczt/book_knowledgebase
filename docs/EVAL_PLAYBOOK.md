@@ -147,7 +147,14 @@
   --gen-top-k 8 --judge --llm-provider deepseek --llm-model deepseek-flash
 ```
 
-产物：`eval/reports/<label>_<时间戳>.md` + 同名 `.json`（含逐条 rank、回答、判分，可离线分析）。
+```bash
+# ③ 未召回归因（把"没命中"拆成数据问题 / 检索问题）
+.venv/bin/python scripts/analyze_misses.py \
+  --report eval/reports/<xxx>.json --collection kb_xxx
+# 输出：已命中 / 库里没有 / 有但没召回，按题型分组 + 明细
+```
+
+产物：`eval/reports/<label>_<时间戳>.md` + 同名 `.json`（含逐条完整排名、`gold_rank`、回答、判分，可离线分析）。
 指标口径有自检：`--self-test`。
 
 **与后端已有能力的衔接**（面试可讲"不是另起一套"）：
