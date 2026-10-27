@@ -11,14 +11,25 @@
 
 ## 功能特性
 
-- 💬 **多轮对话**：追问（"二者矛盾在哪"）会先用 LLM 补全成独立问题再检索，避免指代导致召回失败
+- 💬 **多轮对话**：追问（"二者矛盾在哪"）会先用 LLM 补全成独立问题再检索；含指代才触发，失败退化为拼接上一轮
 - 🖼️ **多模态**：图片自动通过 Vision LLM 生成描述并索引
-- 🔍 **混合检索**：Dense（向量）+ Sparse（BM25）双路召回，RRF 融合 + CrossEncoder 重排
+- 🔍 **混合检索**：Dense（向量）+ 自研中文 BM25 稀疏向量双路召回，RRF 融合 + CrossEncoder 精排
 - 🔒 **Embedding 锁定**：防止向量空间错位的静默失败
-- 💬 **流式问答**：SSE 实时输出，历史会话管理
+- ⚡ **流式问答**：SSE 实时输出，历史会话管理
 - 🌐 **多模型**：豆包（doubao-seed）、DeepSeek、Ollama（本地）、vLLM
-- 🖥️ **双端入口**：React 前端（豆包风格）+ CLI 终端工具
+- 🖥️ **双端入口**：React 前端 + CLI 终端工具
+- 📊 **可观测与评测**：五层 trace（query/retrieval/rerank/generation/performance）+ 离线评测与回归门禁
 - 🔧 **微调模块**：QLoRA 垂直领域微调，导出 GGUF 到 Ollama
+
+**实测效果**（本机 26 本书 / 35941 chunks / bge-m3 1024 维，100 条自建评测集）：
+
+| 场景 | 指标 |
+|---|---|
+| 精排 on/off | Hit@1 0.608 → **0.763**，MRR@10 0.709 → **0.847**（R@30 不变，只重排不扩召回） |
+| 多轮追问改写（28 条） | Hit@1 0.464 → **0.821**，Recall@10 0.536 → **0.964** |
+| 生成质量（24 条 judge） | faithfulness 3.75/5、拒答率 100%、TTFT P50 4.8s |
+
+> 口径与复现方式见 `scripts/eval_rag.py` / `scripts/eval_ci.py` / `scripts/eval_rewrite.py`；样本量有限，只采信量级差异。
 
 ---
 
@@ -88,12 +99,12 @@ make dev-frontend
 3. 等待绿色状态点（索引完成）
 4. 点击「新对话」，选择 LLM，开始问答
 
-**通过 CLI**：
+**通过 CLI**（HTTP 客户端，后端需已启动）：
 ```bash
-pip install -e backend/
-book-rag kb create "我的书库" --provider doubao
-book-rag ingest --kb-id <id> path/to/book.pdf
-book-rag chat --kb-id <id>
+python -m cli.main kb create --name "我的书库" \
+  --embedding-provider ollama --model bge-m3 --dim 1024
+python -m cli.main ingest ./path/to/book.pdf --kb-id <id>
+python -m cli.main chat --kb-id <id>
 ```
 
 ---
@@ -112,10 +123,11 @@ book_knowledgebase/
 │   │   ├── captioning/       # 图片 Vision Caption
 │   │   ├── indexing/         # 摄入流水线
 │   │   ├── retrieval/        # 混合检索 + Reranker
-│   │   └── rag/              # RAG Pipeline（流式）
+│   │   └── rag/              # RAG Pipeline（流式）+ 多轮查询改写（query_rewriter.py）
 │   ├── db/                   # ORM 模型、CRUD、Schema、Alembic 迁移
 │   ├── tasks/                # 后台摄入任务
 │   ├── vector_store/         # Qdrant 向量存储
+│   ├── tests/                # pytest（离线，不依赖 Qdrant / 外部模型）
 │   ├── config.py             # pydantic-settings 配置
 │   └── main.py               # FastAPI App 入口
 ├── frontend/                 # React 前端
@@ -134,8 +146,16 @@ book_knowledgebase/
 │   ├── train.py              # Unsloth LoRA 训练
 │   ├── export_to_gguf.py     # 导出到 Ollama
 │   └── evaluate.py           # 效果评估
+├── scripts/                  # 评测与诊断脚本
+│   ├── gen_eval_set.py       # 反向造题（单跳 / 跨书多跳 / 图片）
+│   ├── eval_rag.py           # 检索指标 + 参数扫描 + 生成质量（LLM judge）
+│   ├── eval_ci.py            # 知识库更新后的回归门禁（gold 体检 + 基线对比 + 退出码）
+│   ├── eval_rewrite.py       # 多轮追问改写：off / concat / llm / hybrid 对照
+│   └── calibrate_threshold.py / analyze_misses.py
+├── eval/                     # 评测数据：dataset.jsonl（100 条）+ multiturn*.jsonl（追问用例）
 ├── docs/
 │   ├── ARCHITECTURE.md       # 系统架构图（Mermaid）
+│   ├── USAGE.md              # 使用说明
 │   ├── preprocessing_guide.md # 数据预处理指南
 │   └── finetuning_guide.md   # 微调指南
 ├── docker-compose.yml        # 生产环境
@@ -157,9 +177,20 @@ book_knowledgebase/
 ### 混合检索策略
 
 - **Dense**: Embedding 模型生成的语义向量（float32）
-- **Sparse**: FastEmbed BM25 (`Qdrant/bm25`)，进程内 ONNX，关键词精确匹配
-- **融合**: Qdrant 原生 Prefetch + RRF（倒数排名融合），无需手动合并列表
-- **重排**: FlashRank CrossEncoder ms-marco-MiniLM，可选第二阶段精排
+- **Sparse**: 自研中文 BM25 —— NFKC + 小写、中文取单字 + 相邻二元组、`mmh3` 稳定哈希到 uint32，IDF 交给 Qdrant 服务端（`modifier=IDF`）。不用 FastEmbed 的 `Qdrant/bm25`：它把中文整句当一个 token，专有名词与短查询基本不命中
+- **融合**: Qdrant 原生 Prefetch + RRF（倒数排名融合），一次请求完成双路召回与融合
+- **精排**: CrossEncoder，默认走后端 HTTP 服务（`BAAI/bge-reranker-v2-m3`），也可切本地 FlashRank；失败 60s 熔断并回退融合分
+
+### 多轮追问的查询改写
+
+检索只用当前这一句话，多轮里「他为什么这么做？」没有实体词，召回必然跑偏，所以检索前先改写（`core/rag/query_rewriter.py`）：
+
+1. **先判定要不要改**：含指代（他/它/二者/上述/这个/这种…）或极短且无专名才改；首轮与本来就完整的问题直接短路，不花 LLM 调用；
+2. **独立改写实例**：温度 0、`reasoning_effort=low`、独立 `max_tokens`、超时 60s，只喂最近 4 条消息；
+3. **输出过闸门**：长度上下限（防截断、防模型"直接作答"）、必须仍是问句、拒答/解释类输出判失败；
+4. **失败可退化**：任一步异常都退化为"拼接上一轮提问"（`concat`），不阻塞检索；实际策略写进 trace 的 `rewrite.method`。
+
+28 条多轮用例实测 Hit@1 0.464 → 0.821。`QUERY_REWRITE` 可切 `llm`（默认）/ `concat`（不调模型）/ `off`。
 
 ### 图片处理
 
@@ -170,24 +201,56 @@ book_knowledgebase/
 
 ---
 
+## 测试与评测
+
+```bash
+make test     # 后端单测（离线，不依赖 Qdrant / 外部模型，pytest + pytest-asyncio）
+make lint     # ruff
+make check    # lint + test（提交前门禁）
+```
+
+评测脚本需要后端在跑（默认 `http://127.0.0.1:8000`，端口被占用时用 `--base-url` 指到实际端口）：
+
+```bash
+# 检索指标 + 参数扫描（不花 LLM 额度）
+.venv/bin/python scripts/eval_rag.py --kb-id <kb_id> --base-url http://127.0.0.1:8000 \
+  --stage retrieval --top-k 30 --sweep "rerank=on,off" --label baseline
+
+# 生成质量（引用覆盖、拒答率、TTFT，可选 LLM judge）
+.venv/bin/python scripts/eval_rag.py --kb-id <kb_id> --stage generation --judge --label gen
+
+# 知识库更新后的回归门禁：gold 体检 → 精排 on/off → 对比基线 → 退出码
+.venv/bin/python scripts/eval_ci.py --kb-id <kb_id> --collection kb_<去掉横线的kb_id>
+
+# 多轮追问改写的四策略对照（off / concat / llm / hybrid）
+.venv/bin/python scripts/eval_rewrite.py --kb-id <kb_id> --label rewrite
+```
+
+产物写在 `eval/reports/`（`.md` + `.json`，含逐条排名与打分）。评测数据集在 `eval/dataset.jsonl`（100 条）与 `eval/multiturn*.jsonl`（28 条多轮追问）。
+
+---
+
 ## CLI 使用
+
+CLI 是一个 HTTP 客户端，需要在仓库根目录执行（后端需已启动）：
 
 ```bash
 # 知识库管理
-book-rag kb list
-book-rag kb create "Deep Learning" --provider doubao
-book-rag kb clear <kb-id>
-book-rag kb delete <kb-id>
+python -m cli.main kb list
+python -m cli.main kb create --name "Deep Learning" \
+  --embedding-provider ollama --model bge-m3 --dim 1024
+python -m cli.main kb clear --kb-id <id> --yes
+python -m cli.main kb delete --kb-id <id> --yes
 
 # 摄入文档
-book-rag ingest --kb-id <id> book.pdf
-book-rag ingest --kb-id <id> books/  # 整个目录
+python -m cli.main ingest ./book.pdf --kb-id <id>
+python -m cli.main ingest ./books/ --kb-id <id>     # 整个目录
 
 # 检索
-book-rag search --kb-id <id> "什么是反向传播？" --top-k 5
+python -m cli.main search "什么是反向传播？" --kb-id <id> --top-k 5
 
 # 交互式聊天
-book-rag chat --kb-id <id> --provider doubao --model doubao-seed-1-6-250715
+python -m cli.main chat --kb-id <id> --llm-provider deepseek
 ```
 
 ---
@@ -279,9 +342,12 @@ make rerank-down      # 停止（手工启动的实例也会被接管停止）
 ## 文档
 
 - [系统架构图](docs/ARCHITECTURE.md)
+- [使用说明](docs/USAGE.md)
 - [数据预处理指南](docs/preprocessing_guide.md)
 - [微调指南](docs/finetuning_guide.md)
 - [微调模块说明](finetuning/README.md)
+
+> 评测手册与面试笔记属于个人本地资料（已在 `.gitignore` 中排除），不随仓库分发。
 
 ---
 
@@ -295,9 +361,9 @@ make rerank-down      # 停止（手工启动的实例也会被接管停止）
 | ORM | SQLAlchemy Async + Alembic |
 | 前端 | React 18 + Vite + TypeScript + Tailwind CSS |
 | 状态管理 | Zustand + TanStack Query |
-| Embedding | 豆包 / Ollama / vLLM + FastEmbed BM25 |
+| Embedding | 豆包 / Ollama(bge-m3) / vLLM + 自研中文 BM25 稀疏编码 |
 | LLM | 豆包 / DeepSeek / Ollama / vLLM |
-| 重排 | FlashRank CrossEncoder |
+| 重排 | CrossEncoder（bge-reranker-v2-m3 via HTTP，可切本地 FlashRank） |
 | 微调 | Unsloth + LoRA + SFTTrainer |
 | 日志 | structlog |
 | CLI | Typer + Rich |

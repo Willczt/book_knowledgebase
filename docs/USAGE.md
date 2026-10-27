@@ -1,6 +1,8 @@
 # 电子书 RAG 知识库系统 — 使用手册
 
-> 版本：v0.1.0 | 更新日期：2026-07-22
+> 版本：v0.2.0 | 更新日期：2026-10-27
+> 本文档合并了旧版 `usage_guide.md`（v1.0，已删除）：保留其中仍然有效的运维实践与调优经验，
+> 删掉了 FastEmbed BM25、pyenv/conda 安装等过期内容，并按当前代码校正了参数与命令。
 
 ---
 
@@ -15,6 +17,7 @@
 7. [多模型配置指南](#7-多模型配置指南)
 8. [常见问题排查（FAQ）](#8-常见问题排查faq)
 9. [生产部署建议](#9-生产部署建议)
+10. [知识库运维与检索调优](#10-知识库运维与检索调优)
 
 ---
 
@@ -115,7 +118,7 @@ curl http://localhost:8000/api/v1/health
 
 ```bash
 # 创建知识库（使用 Ollama 本地 embedding）
-python cli/main.py kb create \
+python -m cli.main kb create \
   --name "我的书库" \
   --embedding-provider ollama \
   --model nomic-embed-text \
@@ -124,10 +127,10 @@ python cli/main.py kb create \
 # 记录输出中的 ID，例如：3f8a1b2c-...
 
 # 上传一本书
-python cli/main.py ingest ./my_book.pdf --kb-id 3f8a1b2c-...
+python -m cli.main ingest ./my_book.pdf --kb-id 3f8a1b2c-...
 
 # 开始提问
-python cli/main.py chat --kb-id 3f8a1b2c-...
+python -m cli.main chat --kb-id 3f8a1b2c-...
 ```
 
 ---
@@ -209,6 +212,8 @@ DATABASE_URL=postgresql+asyncpg://bookrag:bookrag@localhost:5432/bookrag
 | `CHUNK_SIZE` | `512` | 文本分块大小（按字符数）。技术书籍推荐 512-800 |
 | `CHUNK_OVERLAP` | `64` | 相邻 chunk 的重叠字符数，避免语义在块边界断裂 |
 | `MAX_IMAGE_DIMENSION` | `1024` | 提取图片的最大边长（像素），超出则自动缩放 |
+| `QUERY_REWRITE` | `llm` | 多轮追问的检索改写：`llm` 用 LLM 补全指代 / `concat` 只拼接上一轮提问（不调模型）/ `off` 关闭。详见 10.5 |
+| `QUERY_REWRITE_MAX_TOKENS` | `2048` | 改写调用的生成长度上限（推理模型的思考过程也计入）|
 
 ### 2.9 Rerank 重排
 
@@ -352,7 +357,7 @@ export BOOKRAG_API_URL=http://your-server:8000/api/v1
 #### 列出所有知识库
 
 ```bash
-python cli/main.py kb list
+python -m cli.main kb list
 ```
 
 示例输出：
@@ -370,7 +375,7 @@ python cli/main.py kb list
 #### 创建知识库
 
 ```bash
-python cli/main.py kb create \
+python -m cli.main kb create \
   --name "深度学习书库" \
   --embedding-provider doubao \
   --model doubao-embedding-vision-251215 \
@@ -405,36 +410,36 @@ python cli/main.py kb create \
 
 ```bash
 # 需要二次确认
-python cli/main.py kb clear --kb-id 3f8a1b2c-...
+python -m cli.main kb clear --kb-id 3f8a1b2c-...
 
 # 跳过确认（脚本自动化时使用）
-python cli/main.py kb clear --kb-id 3f8a1b2c-... --yes
+python -m cli.main kb clear --kb-id 3f8a1b2c-... --yes
 ```
 
 #### 删除知识库
 
 ```bash
 # 危险操作，永久删除所有数据
-python cli/main.py kb delete --kb-id 3f8a1b2c-...
+python -m cli.main kb delete --kb-id 3f8a1b2c-...
 
 # 跳过确认
-python cli/main.py kb delete --kb-id 3f8a1b2c-... --yes
+python -m cli.main kb delete --kb-id 3f8a1b2c-... --yes
 ```
 
 ### 4.2 文档摄入
 
 ```bash
 # 摄入 PDF
-python cli/main.py ingest ./deep_learning.pdf --kb-id 3f8a1b2c-...
+python -m cli.main ingest ./deep_learning.pdf --kb-id 3f8a1b2c-...
 
 # 摄入 EPUB
-python cli/main.py ingest ./python_cookbook.epub --kb-id 3f8a1b2c-...
+python -m cli.main ingest ./python_cookbook.epub --kb-id 3f8a1b2c-...
 
 # 摄入 Markdown
-python cli/main.py ingest ./notes.md --kb-id 3f8a1b2c-...
+python -m cli.main ingest ./notes.md --kb-id 3f8a1b2c-...
 
 # 摄入后不等待完成（异步，立即返回）
-python cli/main.py ingest ./big_book.pdf --kb-id 3f8a1b2c-... --no-wait
+python -m cli.main ingest ./big_book.pdf --kb-id 3f8a1b2c-... --no-wait
 ```
 
 摄入成功示例输出：
@@ -451,10 +456,10 @@ python cli/main.py ingest ./big_book.pdf --kb-id 3f8a1b2c-... --no-wait
 ### 4.3 检索（不生成回答）
 
 ```bash
-python cli/main.py search "什么是反向传播算法" --kb-id 3f8a1b2c-...
+python -m cli.main search "什么是反向传播算法" --kb-id 3f8a1b2c-...
 
 # 自定义返回数量
-python cli/main.py search "梯度消失问题" --kb-id 3f8a1b2c-... --top-k 3
+python -m cli.main search "梯度消失问题" --kb-id 3f8a1b2c-... --top-k 3
 ```
 
 示例输出：
@@ -477,13 +482,13 @@ python cli/main.py search "梯度消失问题" --kb-id 3f8a1b2c-... --top-k 3
 
 ```bash
 # 使用 DeepSeek（默认）
-python cli/main.py chat --kb-id 3f8a1b2c-...
+python -m cli.main chat --kb-id 3f8a1b2c-...
 
 # 使用豆包（需配置 ARK_API_KEY）
-python cli/main.py chat --kb-id 3f8a1b2c-... --llm-provider doubao
+python -m cli.main chat --kb-id 3f8a1b2c-... --llm-provider doubao
 
 # 使用 Ollama 本地模型
-python cli/main.py chat --kb-id 3f8a1b2c-... --llm-provider ollama --llm-model qwen2.5:7b
+python -m cli.main chat --kb-id 3f8a1b2c-... --llm-provider ollama --llm-model qwen2.5:7b
 ```
 
 进入对话模式：
@@ -840,14 +845,49 @@ GET /api/v1/llm-providers
 GET /api/v1/health
 ```
 
-响应（200 OK）：
+响应（200 OK，`providers` 是各模型服务的连通性探测结果）：
 
 ```json
 {
   "status": "ok",
-  "qdrant": "connected"
+  "db": "ok",
+  "qdrant": "ok",
+  "providers": {
+    "ollama": {"ok": true, "model_count": 6, "has_embedding_model": true},
+    "deepseek": {"ok": true, "configured": true, "model": "deepseek-flash"}
+  }
 }
 ```
+
+> 这是**业务健康**接口（给设置页/排障用），不参与容器编排；编排用的是 `/healthz`（只测进程）与 `/readyz`（查 DB + Qdrant）。
+
+### 5.5 检索接口（裸检索，不生成回答）
+
+```http
+POST /api/v1/knowledge-bases/{kb_id}/search
+```
+
+```json
+{
+  "query": "曾国藩为什么强调先守稳再求胜",
+  "top_k": 8,
+  "score_threshold": 0,
+  "min_rerank_score": 0,
+  "use_reranker": true,
+  "rerank_candidates": 30
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `query` | 检索文本；可额外带 `image`（base64）做图文联合检索 |
+| `top_k` | 返回片段数，默认取 `DEFAULT_TOP_K` |
+| `score_threshold` | 作用在 RRF 融合分上（0.3~1.0，只反映名次） |
+| `min_rerank_score` | 作用在精排分上（0~1 相关度） |
+| `use_reranker` | 不传则跟随 `RERANK_ENABLED` |
+| `rerank_candidates` | 参与精排的候选数 |
+
+响应 `results` 为片段数组（`chunk_id / text / score / source_doc / page_num / chunk_type / image_path`），建议用这个接口调检索参数——它不调 LLM，几乎不花钱。
 
 ---
 
@@ -918,10 +958,12 @@ Caption 提供商优先级（`backend/core/llm/registry.py` 的 `get_caption_pro
 
 | 类型 | 方法 | 存储字段 | 说明 |
 |------|------|----------|------|
-| Dense（稠密） | Embedding 模型（doubao / ollama） | Qdrant `dense` 命名向量 | 语义相似度，余弦距离 |
-| Sparse（稀疏） | FastEmbed BM25 (`Qdrant/bm25`) | Qdrant `sparse` 命名向量 | 关键词精确匹配 |
+| Dense（稠密） | Embedding 模型（doubao / ollama / vllm） | Qdrant `dense` 命名向量 | 语义相似度，余弦距离 |
+| Sparse（稀疏） | 自研中文 BM25（`core/retrieval/sparse.py`） | Qdrant `sparse` 命名向量 | 关键词精确匹配 |
 
-> BM25 模型首次使用时自动下载（约 100 MB），需要网络连接。下载完成后缓存到本地，后续无需下载。
+> 稀疏编码不依赖外部模型：文本先做 NFKC + 小写，中文取**单字 + 相邻二元组**、英文保留长度 ≥2 的词，用 `mmh3` 稳定哈希成 uint32 下标，只算 BM25 的词频饱和项，IDF 交给 Qdrant 服务端（`modifier=IDF`）。
+> 之所以不用 FastEmbed 的 `Qdrant/bm25`：它的分词器把中文整句当成一个 token，专有名词和短查询几乎不命中。
+> 编码规则带 `TOKENIZER_VERSION`：**改了分词规则必须重算已有集合的稀疏向量**（`cd backend && python -m scripts.rebuild_sparse --collection kb_xxx`），否则新旧 token 下标不一致会静默降质。
 
 ### 6.5 混合检索与融合（RRF）
 
@@ -1004,7 +1046,7 @@ DOUBAO_VISION_CHAT_MODEL=doubao-seed-2-0-lite-260428
 **创建知识库时的参数：**
 
 ```bash
-python cli/main.py kb create \
+python -m cli.main kb create \
   --name "豆包知识库" \
   --embedding-provider doubao \
   --model doubao-embedding-vision-251215 \
@@ -1038,7 +1080,7 @@ DeepSeek 仅支持作为问答 LLM（以及 Caption），不支持作为 Embeddi
 
 ```bash
 # CLI 中指定 DeepSeek 作为问答模型
-python cli/main.py chat --kb-id 3f8a1b2c-... --llm-provider deepseek
+python -m cli.main chat --kb-id 3f8a1b2c-... --llm-provider deepseek
 ```
 
 ### 7.3 Ollama（本地模型）
@@ -1082,14 +1124,14 @@ OLLAMA_DEFAULT_EMBED_MODEL=nomic-embed-text
 
 ```bash
 # nomic-embed-text 维度为 768
-python cli/main.py kb create \
+python -m cli.main kb create \
   --name "本地书库" \
   --embedding-provider ollama \
   --model nomic-embed-text \
   --dim 768
 
 # mxbai-embed-large 维度为 1024
-python cli/main.py kb create \
+python -m cli.main kb create \
   --name "高质量本地书库" \
   --embedding-provider ollama \
   --model mxbai-embed-large \
@@ -1208,24 +1250,30 @@ curl http://localhost:11434/api/embeddings \
 
 系统严格校验 `(provider, model_id, vector_dim)` 三元组。如果需要更换 embedding 模型，必须：
 
-1. 删除旧知识库：`python cli/main.py kb delete --kb-id xxx --yes`
+1. 删除旧知识库：`python -m cli.main kb delete --kb-id xxx --yes`
 2. 用新模型重新创建知识库
 3. 重新摄入所有文档
 
 ---
 
-### Q5：BM25 稀疏检索报错 `Failed to download Qdrant/bm25`
+### Q5：中文专有名词搜不到 / 换了分词规则后检索质量突然变差
 
-**原因**：首次使用 BM25 需要下载约 100 MB 的 ONNX 模型，网络不通。
+**现象**：英文和普通词能命中，但人名、书名、型号（"GB/T 1234"、"第 4.2 节"）这类精确词几乎搜不到；或升级版本后老知识库的稀疏召回明显变差。
+
+**原因**：
+1. 稀疏编码是自研的（中文单字 + 相邻二元组），不依赖外部模型；如果查询和索引使用的 `TOKENIZER_VERSION` 不一致，token 下标对不上 → 稀疏一路等于随机噪声。
+2. 集合创建时缺少 `modifier=IDF`，IDF 退化。
 
 **解决方案**：
 
 ```bash
-# 手动下载 fastembed BM25 模型
-python -c "from fastembed import SparseTextEmbedding; SparseTextEmbedding(model_name='Qdrant/bm25')"
-```
+# 只重算稀疏向量（不重跑 embedding，成本低），支持 --dry-run / --collection / --all
+cd backend && python -m scripts.rebuild_sparse --collection kb_xxx --dry-run
+cd backend && python -m scripts.rebuild_sparse --collection kb_xxx
 
-如果网络受限，可以使用代理或手动下载后放置到 fastembed 缓存目录（通常为 `~/.cache/fastembed/`）。
+# 自检分词与编码是否符合预期
+cd backend && python -m pytest tests/test_sparse.py -q
+```
 
 ---
 
@@ -1240,8 +1288,8 @@ python -c "from fastembed import SparseTextEmbedding; SparseTextEmbedding(model_
 3. 若需要多模态检索，修复 Vision LLM 配置后，清空知识库重新摄入：
 
 ```bash
-python cli/main.py kb clear --kb-id xxx --yes
-python cli/main.py ingest ./book.pdf --kb-id xxx
+python -m cli.main kb clear --kb-id xxx --yes
+python -m cli.main ingest ./book.pdf --kb-id xxx
 ```
 
 ---
@@ -1472,6 +1520,134 @@ if [ "$HEALTH" != "ok" ]; then
   # 发送告警...
 fi
 ```
+
+---
+
+## 10. 知识库运维与检索调优
+
+> 本章合并自旧版 `usage_guide.md`，并按当前实现校正（旧的 `ENABLE_RERANKER` 之类参数名已废弃，统一用 `RERANK_ENABLED`）。
+
+### 10.1 知识库生命周期
+
+```
+创建知识库（此时锁定 embedding 三元组，之后不可换模型）
+    │
+    ▼
+上传文档（可多次追加，增量入库）
+    │
+    ├─→ 建立对话会话（可多个并行，各自独立历史）
+    │
+    ├─→ 清空向量（保留 KB 与文档记录，需重新触发摄入）
+    │
+    └─→ 删除知识库（级联删除文档、向量、会话）
+```
+
+一个知识库绑定一个 Qdrant collection（`kb_<uuid 去横线>`），collection 名在建库时确定，不能改。
+
+### 10.2 清空 vs 删除
+
+| 操作 | 向量数据 | 文档记录 | KB 元数据 | 会话历史 |
+|---|---|---|---|---|
+| 清空（Clear） | 删除 | 重置为 `pending` | 保留 | 保留 |
+| 删除（Delete） | 删除 | 删除 | 删除 | 删除 |
+
+**怎么选**：
+- **清空**：调了 `CHUNK_SIZE` / 换了 caption 策略 / 稀疏向量规则升级后，想用同一批文档重跑；
+- **删除**：不再需要这个库，彻底回收空间。
+
+> 清空只删向量、不重跑任务，需要重新触发摄入（前端「重新索引」或重新上传）。
+
+### 10.3 上传与批量摄入
+
+**格式与大小**：
+
+| 格式 | 注意点 |
+|---|---|
+| PDF | 需要带 text layer；扫描件没有 OCR，文字会提取为空（只能靠图片 Caption） |
+| EPUB | 标准 EPUB 2/3；能自动提取章节标题作为元数据 |
+| Markdown / TXT | 图片用相对路径，确保文件可访问 |
+
+单文件建议 ≤ 100 MB；500 页以上的大 PDF 建议按章节拆分——解析结果目前是全量驻留内存的，超大文件是 OOM 的主要来源。
+
+**批量摄入**：
+
+```bash
+# 方式一：Makefile（内部调用 python -m cli.main ingest，目录会递归）
+make ingest path=./books/ kb=<kb-id>
+
+# 方式二：自己写循环（串行，避免把 embedding 服务打满）
+for f in ./books/*.{pdf,epub,md}; do
+  [ -f "$f" ] && python -m cli.main ingest "$f" --kb-id <kb-id>
+done
+```
+
+并发上限由 `INGEST_WORKERS`（默认 2）控制，图片 Caption 由 `CAPTION_CONCURRENCY`（默认 5）控制。**不要**用 `xargs -P` 之类的方式同时灌几十个文件：摄入任务本身已经在队列里排队，手工并发只会放大下游超时。
+
+### 10.4 摄入状态监控
+
+状态流转：`pending → processing → indexed`，失败落 `failed` 并写 `error_message`（截断 2000 字符），重试最多 3 次、指数退避，进程崩溃后靠租约（`lease_until`）回收。
+
+```bash
+# 知识库统计：文档数 / 已索引数 / 失败数 / 向量点数
+curl http://localhost:8000/api/v1/knowledge-bases/<kb-id>/stats
+```
+
+```json
+{
+  "document_count": 5,
+  "indexed_document_count": 4,
+  "failed_document_count": 1,
+  "qdrant_points_count": 2847
+}
+```
+
+**排查顺序**：① `failed` 文档的 `error_message` → ② 平均 `attempts`（接近 3 说明下游不稳）→ ③ `pending` 是否持续积压（worker 没跑或被租约卡住）→ ④ 后端日志里的 `ingest_*` 事件。
+
+### 10.5 多轮追问的检索改写
+
+**为什么需要**：检索只用当前这一句话。多轮里「他为什么这么做？」「那个小组有多大规模？」没有任何实体词，召回必然跑偏，生成层只能答"资料里没有"。
+
+| 模式 | 行为 | 适用 |
+|---|---|---|
+| `llm`（默认） | 用 LLM 把指代补全成可独立检索的问题，失败自动退化 `concat` | 常规多轮问答 |
+| `concat` | 直接把上一轮用户提问和当前问题拼起来，不调模型 | 成本敏感、且上一轮原话通常带实体 |
+| `off` | 不改写 | 单轮问答为主，或排查"是不是改写带偏了" |
+
+实测（28 条多轮用例，`scripts/eval_rewrite.py`）：不改写 Hit@1 0.464 / R@10 0.536；`concat` 0.571 / 0.679；`llm` **0.821 / 0.964**。但要注意分场景——上一轮原话带实体时 `concat` 与 `llm` 打平（0.875），只有上一轮是「然后呢？」这类无效追问时 `llm` 才有明显优势（0.750 vs 0.167）。
+
+**调优与排查**：
+- 只对"含指代或极短且无专名"的问题触发，首轮和完整问题不花调用；
+- 改写上下文固定取最近 4 条消息（assistant 截断 400 字），实体更早出现时补不回来；
+- trace 里看 `query.original` / `query.rewritten` / `query.rewrite.method`（`none`/`llm`/`concat`）/ `reason`，能直接判断"答错是不是改写带偏了"。
+
+### 10.6 检索参数调优
+
+| 参数 | 位置 | 默认 | 说明 |
+|---|---|---|---|
+| `DEFAULT_TOP_K` | `.env` | 8 | 最终进 Prompt 的片段数；再大收益递减、token 线性涨 |
+| `RERANK_CANDIDATES` | `.env` | 30 | 参与精排的候选数；实测扩到 50 反而 Hit@1 -3.1pt |
+| `prefetch_limit` | `core/retrieval/retriever.py` | `max(20, top_k×2)` | 每路预取条数 |
+| RRF `k` | Qdrant `Fusion.RRF` | 60 | 越大排名差异越平滑 |
+| `score_threshold` | 请求参数 | 0 | **RRF 融合分**（0.3~1.0，只反映名次），不是语义相似度；设 0.9 会让 R@10 掉一半以上 |
+| `min_rerank_score` | 请求参数 | 0 | **精排分**（0~1 相关度），0.02~0.05 可降延迟 17%，但误拒率翻倍 |
+
+**改参数的流程**：改一项 → 重启 → 用同一数据集跑 `scripts/eval_rag.py`（或 `scripts/eval_ci.py` 对比基线）→ 差异小于 8 个百分点当噪声 → 记下决策依据。
+
+`CHUNK_SIZE` / `CHUNK_OVERLAP` 的推荐值见 9.7；**改完必须清空并重新摄入**，否则新旧块大小混在一个集合里，检索结果不可比。
+
+### 10.7 回答质量怎么判断
+
+先定位是"检索没给到"还是"生成没用上"：
+
+| 现象 | 判断方法 | 处理方向 |
+|---|---|---|
+| 答"资料里没有"，但书里确实有 | trace 的 `retrieval.results` 里没有正确片段 | 调分块/embedding/召回条数；多轮追问先看改写是否生效 |
+| 正确片段进了上下文，回答却没用到 | `generation.citations` 显示该片段 `cited=false` | 调 Prompt、减少无关上下文、换模型 |
+| 片段在内但排在很后面 | `retrieval` 明细里的 `rank_before → rank_after` | 精排是否生效（`rerank.status=applied`）、候选数是否够 |
+| 回答编造了资料里没有的细节 | judge 判 faithfulness 低 | 收紧 system prompt、结构化引用、降低温度 |
+
+> 引用覆盖率（回答里能原样匹配到片段句子的比例）只是**弱指标**：改写式引用会漏判，模型幻觉引用会误判，别拿它当"引用能力"的唯一依据。
+> 需要量化时用 `scripts/eval_rag.py --stage generation --judge`，或 `eval_ci.py` 做回归门禁。
 
 ---
 

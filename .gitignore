@@ -59,10 +59,12 @@ htmlcov/
 backend/db/migrations/versions/*.py
 !backend/db/migrations/versions/.gitkeep
 
-# 面试准备笔记（仅本地保留，禁止提交/推送）
+# 面试准备笔记与评测文档（仅本地保留，禁止提交/推送）
 docs/INTERVIEW_PREP.md
-docs/interview_prep*.md
-docs/INTERVIEW_NOTES*.md
+docs/interview*.md
+docs/INTERVIEW*.md
+docs/EVAL_PLAYBOOK.md
+docs/EVAL_REPORT.md
 
-# 评测产物（dataset.jsonl 入库，报告/逐条明细不入库）
+# 评测产物（dataset.jsonl / multiturn*.jsonl 入库，报告/逐条明细不入库）
 eval/reports/
