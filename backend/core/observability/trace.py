@@ -201,11 +201,15 @@ class TraceStore:
             files = sorted(self._dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         except OSError:
             return
-        for stale in files[self._max_files:]:
+        # 单次只清一小批：某些运行环境（沙箱 / 审计钩子）遇到批量删除会直接中断进程，
+        # 而每次请求只会多产生一个文件，慢慢清就够，没必要一次删几百个。
+        for stale in files[self._max_files : self._max_files + 20]:
             try:
                 stale.unlink()
-            except OSError:
-                continue
+            except BaseException as exc:  # noqa: BLE001
+                # 这里必须拦 BaseException：清理失败不应该让一次正常请求返回 500
+                logger.warning("trace_prune_failed", path=stale.name, error=str(exc)[:120])
+                return
 
     def count(self) -> int:
         return len(self._items)

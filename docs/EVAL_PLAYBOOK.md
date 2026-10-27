@@ -468,3 +468,141 @@ curl -s -o /dev/null -w "%{http_code}\n" http://192.168.18.183:8100/v1/models   
 > `.env` 的 `RERANK_BASE_URL` 指向 `192.168.18.183:8100`——它**曾经不可达**，
 > 那时所有「有精排」实验实际都是降级态（两组指标完全一致），这正是 5.3 节的证据来源。
 > 现在服务已恢复，跑之前先 `curl` 确认 200，否则会白跑一轮。
+
+---
+
+## 10. 人工复测清单（不想写代码时按这个走）
+
+### 10.1 五分钟冒烟
+
+```bash
+# ① 三个服务都在
+curl -s localhost:11434/api/tags | grep -q bge-m3 && echo "ollama ok"
+curl -s -o /dev/null -w "rerank %{http_code}\n" http://192.168.18.183:8100/v1/models
+curl -s -o /dev/null -w "backend %{http_code}\n" http://127.0.0.1:8001/api/v1/health
+
+# ② 指标口径没被改坏
+.venv/bin/python scripts/eval_rag.py --self-test
+
+# ③ gold 数据没过期（KB 更新后必做）
+.venv/bin/python scripts/eval_ci.py --kb-id <kb> --collection <collection> --check-only
+```
+
+### 10.2 单条人工对照（验证某个参数是否真的生效）
+
+```bash
+KB=<kb_id>
+# A：关精排
+curl -s -X POST "http://127.0.0.1:8001/api/v1/knowledge-bases/$KB/search" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"曾国藩为什么强调先自固","top_k":5,"use_reranker":false}' | python -m json.tool
+
+# B：开精排 + 精排阈值 0.05
+curl -s -X POST "http://127.0.0.1:8001/api/v1/knowledge-bases/$KB/search" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"曾国藩为什么强调先自固","top_k":5,"use_reranker":true,"min_rerank_score":0.05}' | python -m json.tool
+```
+
+看三件事：
+1. B 的 `score` 是 rerank 分（0.9x 量级），A 的是融合分；
+2. B 返回条数可能少于 A（阈值生效）；
+3. 顺序应该变化——如果完全一样，先怀疑精排没生效。
+
+然后开调试，看 trace：
+
+```bash
+curl -s -X PUT http://127.0.0.1:8001/api/v1/debug/status \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"layers":["query","retrieval","rerank","generation","performance"]}'
+# 前端 /debug 页面 → 最新 trace → 「重排 Rerank」面板
+# 必须看到 status=已生效；若是「冷却中/调用失败」，说明服务侧有问题
+```
+
+### 10.3 对话层人工验证（3 类问题各一条）
+
+| 类型 | 例子 | 期望 |
+|---|---|---|
+| 有答案 | "曾国藩为什么强调先自固？" | 回答带来源，内容可核 |
+| 无答案 | "我们公司 2025 年 Q3 营收是多少？" | 明确说资料里没有，不要编 |
+| 多跳 | "《亮剑》和《遥远的救世主》对'强者逻辑'的看法有何不同？" | 引用两本书；若只引一本，属已知短板 |
+
+判定标准（不要靠感觉）：
+- 有答案题：回答是否覆盖 `answer_points`（数据集里那条）；
+- 无答案题：是否拒答（出现"资料中没有/未提及"）；
+- 任何题：引用片段能不能支撑结论（点开来源对照）。
+
+---
+
+## 11. 知识库更新后的自动化回归
+
+### 11.1 先理解一个坑
+
+Qdrant 的 point id 是 `uuid4`，**重新摄入任何一篇文档，它的 chunk id 就全变了**。
+评测集里的 `gold_chunk_ids` 直接失效 → 指标暴跌，但系统其实没变差。
+所以回归的第一步永远是「gold 体检」，不是跑分。
+
+### 11.2 一键回归
+
+```bash
+# 体检（不跑分，秒级）
+.venv/bin/python scripts/eval_ci.py \
+  --kb-id <kb> --collection kb_xxx --check-only
+# 退出码：0 全部存在 / 2 有失效
+
+# 完整回归（体检 + 精排 on/off + 对比基线 + 出报告）
+.venv/bin/python scripts/eval_ci.py \
+  --kb-id <kb> --collection kb_xxx
+# 退出码：0 通过 / 1 指标退化 / 2 gold 失效 / 3 服务不可用
+
+# 确认这次就是新标准后，更新基线
+.venv/bin/python scripts/eval_ci.py \
+  --kb-id <kb> --collection kb_xxx --update-baseline
+```
+
+### 11.3 报告里应该有什么
+
+`eval/reports/ci_<ts>.md` 固定包含 7 块：
+
+1. **元信息**：时间、KB、collection、数据集指纹（SHA1 前 8 位）、样本数；
+2. **数据体检**：gold 总数 / 缺失数 / 受影响题号 —— 这决定后面的数能不能信；
+3. **检索指标（关精排）**：整体 + 分题型（Hit@1 / R@5 / R@10 / R@30 / MRR / NDCG）+ 延迟 P50/P95 + 失败数；
+4. **检索指标（开精排）**：同上；
+5. **与基线对比**：逐指标 delta + 是否超过门禁；
+6. **结论一句话**：通过 / 退化 / 数据失效；
+7. 原始 JSON（同名 `.json`）：逐条 ranked 列表，可离线复算。
+
+> 为什么要固定这 7 块：报告是给"三个月后的自己"和"CI"看的。
+> 缺了数据体检，你会对着一堆假指标调参；缺了分题型，你会漏掉多跳题退化。
+
+### 11.4 出现 gold 失效怎么办
+
+```bash
+# 1) 看是哪些题失效
+.venv/bin/python scripts/eval_ci.py ... --check-only    # 会打印 stale_case_ids
+
+# 2) 找出这些题来自哪几本书
+python -c "
+import json
+stale=set(['s001','s007'])   # 用上一步的输出
+rows=[json.loads(l) for l in open('eval/dataset.jsonl',encoding='utf-8') if l.strip()]
+print(sorted({r['source_doc'] for r in rows if r['id'] in stale}))
+"
+
+# 3) 只重造这几本书的题（把旧题从 dataset 里删掉再 append）
+#    或者手工把 gold_chunk_ids 换成新 id（报告 JSON 的 per_case 里有上下文）
+```
+
+**经验**：如果分块参数（chunk_size/overlap）也改了，直接重造题更快，别手工修。
+
+### 11.5 接进 CI
+
+```yaml
+# 伪代码：GitHub Actions / GitLab CI 都一样
+- name: RAG regression
+  run: |
+    .venv/bin/python scripts/eval_ci.py --kb-id $KB --collection $COLLECTION
+  # 退出码非 0 即失败；报告作为 artifact 上传
+```
+
+注意：CI 环境要有 Ollama（embedding）、Qdrant、rerank 服务，否则跑不了。
+没有的话，把评测拆成「夜间任务」在固定机器上跑，而不是每次提交都跑。

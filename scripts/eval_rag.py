@@ -27,11 +27,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import itertools
 import json
 import math
 import re
 import statistics
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -579,6 +581,36 @@ def render_markdown(title: str, reports: list[dict[str, Any]], meta: dict[str, A
 # ============================================================
 
 
+def load_baseline(path: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """读取基线。
+
+    兼容两种格式：
+      - eval_rag.py 生成的完整报告（{"meta":..., "reports": [...]}）
+      - eval_ci.py 生成的精简基线（{"dataset_sha":..., "off": {...}, "on": {...}}）
+
+    返回 (meta, 默认 overall, 分组 overall)
+    """
+    if not path.is_file():
+        raise SystemExit(f"基线文件不存在：{path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    if "reports" in data:
+        for report in data.get("reports", []):
+            if report.get("stage") == "retrieval":
+                overall = report.get("overall", {})
+                return data.get("meta", {}), overall, {}
+        return data.get("meta", {}), {}, {}
+
+    groups = {key: data[key] for key in ("off", "on") if isinstance(data.get(key), dict)}
+    meta = {
+        "dataset_sha": data.get("dataset_sha"),
+        "dataset": data.get("dataset"),
+        "n_cases": data.get("n_cases"),
+    }
+    overall = groups.get("on") or groups.get("off") or {}
+    return meta, overall, groups
+
+
 def parse_sweep(spec: str) -> list[dict[str, Any]]:
     """`top_k=3,5;threshold=0,0.2` → 笛卡尔积的参数字典列表"""
     axes: dict[str, list[str]] = {}
@@ -670,10 +702,64 @@ async def main_async(args: argparse.Namespace) -> None:
     meta = {
         "time": datetime.now().isoformat(timespec="seconds"),
         "dataset": str(dataset_path.relative_to(ROOT)),
+        # 数据集指纹：防止拿不同版本的评测集互相对比
+        "dataset_sha": hashlib.sha1(dataset_path.read_bytes()).hexdigest()[:8],
         "n_cases": len(cases),
         "base_url": args.base_url,
     }
+
+    # 与基线对比：CI 里靠这个判断"这次改动是不是退化了"
+    comparison: dict[str, float] | None = None
+    if args.baseline:
+        baseline_path = ROOT / args.baseline
+        baseline_meta, baseline_default, baseline_groups = load_baseline(baseline_path)
+        # 按本次配置选对应分组：关了重排就比 "off"，否则比 "on"
+        group = "off" if base_params.get("use_reranker") is False else "on"
+        baseline_overall = baseline_groups.get(group) or baseline_default
+        if baseline_meta.get("dataset_sha") and baseline_meta["dataset_sha"] != meta["dataset_sha"]:
+            print(
+                f"  [warn] 基线数据集指纹 {baseline_meta['dataset_sha']} "
+                f"≠ 当前 {meta['dataset_sha']}，两者不可直接比较"
+            )
+        baseline_n = baseline_meta.get("n_cases")
+        if baseline_n and baseline_n != len(cases):
+            print(f"  [warn] 基线样本数 {baseline_n} ≠ 本次 {len(cases)}（用了 --limit？指标不可比）")
+        current_overall = next(
+            (r["overall"] for r in reports if r["stage"] == "retrieval"), {}
+        )
+        if baseline_overall and current_overall:
+            comparison = {
+                key: round(current_overall.get(key, 0) - baseline_overall.get(key, 0), 4)
+                for key in ("hit@1", "recall@10", "mrr@10", "ndcg@10")
+            }
+            meta["baseline"] = str(baseline_path.relative_to(ROOT))
+            meta["baseline_overall"] = baseline_overall
+            meta["delta"] = comparison
+
     markdown = render_markdown(f"RAG 评测报告 · {args.label}", reports, meta)
+    if comparison:
+        markdown += "\n## 与基线对比\n\n"
+        markdown += f"- 基线文件：`{meta['baseline']}`（数据集指纹 {meta.get('dataset_sha')}）\n\n"
+        markdown += "| 指标 | 基线 | 本次 | 变化 |\n|---|---|---|---|\n"
+        baseline_overall = meta["baseline_overall"]
+        current_overall = next(r["overall"] for r in reports if r["stage"] == "retrieval")
+        for key, label in (
+            ("hit@1", "Hit@1"),
+            ("recall@10", "R@10"),
+            ("mrr@10", "MRR@10"),
+            ("ndcg@10", "NDCG@10"),
+        ):
+            delta = comparison[key]
+            mark = "🟢" if delta > 0.01 else ("🔴" if delta < -0.01 else "⚪")
+            markdown += (
+                f"| {label} | {baseline_overall.get(key, 0):.3f} | "
+                f"{current_overall.get(key, 0):.3f} | {delta:+.3f} {mark} |\n"
+            )
+        regressions = [k for k, v in comparison.items() if v < -args.fail_on_drop / 100]
+        if regressions:
+            markdown += f"\n> ⚠️ 退化超过 {args.fail_on_drop} 个百分点：{', '.join(regressions)}\n"
+        else:
+            markdown += f"\n> 无超过 {args.fail_on_drop} 个百分点的退化。\n"
     (out_dir / f"{stem}.md").write_text(markdown, encoding="utf-8")
     (out_dir / f"{stem}.json").write_text(
         json.dumps({"meta": meta, "reports": reports}, ensure_ascii=False, indent=2),
@@ -695,6 +781,16 @@ async def main_async(args: argparse.Namespace) -> None:
                 f"TTFT p50 {report['ttft']['p50_ms']}ms"
             )
     print(f"\n报告已写入 {out_dir / f'{stem}.md'}")
+
+    if comparison:
+        print("\n与基线对比：")
+        for key, delta in comparison.items():
+            flag = "退化" if delta < -args.fail_on_drop / 100 else "OK"
+            print(f"  {key:10} {delta:+.3f}  [{flag}]")
+        if any(value < -args.fail_on_drop / 100 for value in comparison.values()):
+            print(f"\n❌ 存在超过 {args.fail_on_drop} 个百分点的退化，CI 判定失败")
+            sys.exit(1)
+
     print(markdown[:2000])
 
 
@@ -759,6 +855,14 @@ def main() -> None:
     parser.add_argument("--llm-model", default="deepseek-flash")
     parser.add_argument("--judge", action="store_true", help="启用 LLM judge（消耗 DeepSeek 额度）")
     parser.add_argument("--judge-model", default="deepseek-chat")
+    parser.add_argument("--baseline", default="", help="基线报告 JSON 路径（eval/reports/xxx.json）")
+    parser.add_argument(
+        "--fail-on-drop",
+        type=float,
+        default=5.0,
+        dest="fail_on_drop",
+        help="任一指标比基线下降超过该百分点数则退出码 1（默认 5）",
+    )
     parser.add_argument("--self-test", action="store_true", help="只做指标口径自检，不连服务")
     args = parser.parse_args()
     if args.self_test:

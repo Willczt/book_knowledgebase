@@ -1,0 +1,30 @@
+{
+  "updated_at": "2026-10-27T15:24:01",
+  "dataset": "eval/dataset.jsonl",
+  "dataset_sha": "2a9cd8ac",
+  "off": {
+    "n": 97,
+    "hit@1": 0.6082,
+    "recall@1": 0.5464,
+    "recall@3": 0.7216,
+    "recall@5": 0.7835,
+    "recall@8": 0.799,
+    "recall@10": 0.8093,
+    "recall@30": 0.8918,
+    "mrr@10": 0.7088,
+    "ndcg@10": 0.7062
+  },
+  "on": {
+    "n": 97,
+    "hit@1": 0.7629,
+    "recall@1": 0.6907,
+    "recall@3": 0.8505,
+    "recall@5": 0.8711,
+    "recall@8": 0.8814,
+    "recall@10": 0.8866,
+    "recall@30": 0.8918,
+    "mrr@10": 0.8472,
+    "ndcg@10": 0.8244
+  },
+  "n_cases": 97
+}
