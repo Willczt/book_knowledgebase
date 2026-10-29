@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     # 推理强度（DeepSeek 等推理模型）：low 更快更省 token，留空用服务端默认
     llm_reasoning_effort: Optional[str] = None
 
+    # LLM 兜底：本地模型（ollama / vllm）在吐出第一个 token 前失败时自动切到在线模型。
+    # 已经产出内容的不切（半截回答 + 另一个模型续写会前后矛盾）。
+    llm_fallback_enabled: bool = True
+    llm_fallback_provider: str = "deepseek"
+    # 留空则用该 provider 的默认对话模型（deepseek -> DEEPSEEK_MODEL）
+    llm_fallback_model: Optional[str] = None
+
     # 网络超时（秒）：embedding 批量请求 / 图片 caption / 对话
     llm_timeout: int = 120
     embedding_timeout: float = 120.0

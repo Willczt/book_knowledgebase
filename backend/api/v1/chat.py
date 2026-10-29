@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import decode_base64_image, get_db, get_qdrant, get_session_or_404
 from config import get_settings
-from core.llm.registry import create_llm_provider
+from core.llm.registry import create_llm_provider, maybe_wrap_fallback
 from core.observability.trace import new_trace, record_trace
 from core.rag.pipeline import RAGPipeline
 from core.retrieval.reranker import get_reranker
@@ -58,11 +58,13 @@ async def stream_chat(
     # 加载历史对话
     history = await crud.get_recent_messages(db, session.id, turns=settings.context_history_turns)
 
-    # 创建 RAG pipeline
-    llm = create_llm_provider(
-        provider=session.llm_provider,
-        model_id=session.llm_model_id,
-        llm_config=session.llm_config,
+    # 创建 RAG pipeline（本地模型失败时自动兜底到在线模型）
+    llm = maybe_wrap_fallback(
+        create_llm_provider(
+            provider=session.llm_provider,
+            model_id=session.llm_model_id,
+            llm_config=session.llm_config,
+        )
     )
     retrieval_cfg = body.retrieval_config
     top_k = retrieval_cfg.top_k if retrieval_cfg else settings.default_top_k
@@ -133,6 +135,16 @@ async def stream_chat(
                 trace.set("generation", "error", error_message[:500])
             yield f"data: {json.dumps({'error': error_message}, ensure_ascii=False)}\n\n"
         finally:
+            # 本地模型失败切到在线模型时，把原因写进 trace，便于事后核对"这谁答的"
+            if trace is not None and getattr(llm, "used_fallback", False):
+                trace.set(
+                    "generation",
+                    "llm_fallback",
+                    {
+                        "provider": getattr(llm, "fallback_provider", None),
+                        "reason": getattr(llm, "fallback_reason", None),
+                    },
+                )
             # 持久化消息
             full_text = "".join(full_response)
             trace_id = await record_trace(trace)

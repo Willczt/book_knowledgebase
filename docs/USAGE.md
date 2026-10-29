@@ -72,7 +72,26 @@ make install-frontend
 cd frontend && npm install
 ```
 
-### 1.5 启动服务（三个终端）
+### 1.5 启动服务
+
+**方式一：一键启动（推荐）**
+
+```bash
+./scripts/start.sh          # 或 make start
+```
+
+脚本按顺序做四件事，日志写在 `logs/`：
+
+1. **探测 Ollama**：依次尝试 `OLLAMA_BASE_URL`、`127.0.0.1:11434`、默认网关、WSL 的 DNS 服务器（Windows 上跑的 Ollama 在 NAT 模式下只能用后两者访问）；探测结果通过 `OLLAMA_BASE_URL` 传给后端；
+2. **启动 rerank 模型**：执行 `make rerank-up` 并等健康检查通过（失败只告警，精排自动降级为融合分；加 `--strict-rerank` 可直接退出）；
+3. **启动后端**：从仓库根目录以 `PYTHONPATH=backend` 启动，保证相对路径的 `DATABASE_URL=./storage/app.db` 指向真实数据库；
+4. **启动前端**：等 `5173` 就绪后打印汇总；`Ctrl+C` 会停掉本次启动的前后端（rerank 用 `make rerank-down` 单独停）。
+
+常用参数：`--port 8001`（后端换端口）、`--no-frontend`、`--no-rerank`、`--strict-rerank`、`--no-reload`。
+
+> 对话模型默认取 `/api/v1/llm-providers` 的第一项（本地 `ollama`）。本地模型不可用时（连接失败、模型未拉取），后端自动切到 `LLM_FALLBACK_PROVIDER`（默认 `deepseek`），并在 trace 的 `generation.llm_fallback` 里记录原因。关掉兜底：`LLM_FALLBACK_ENABLED=false`。
+
+**方式二：三个终端手动启动**
 
 **终端 1：启动 Qdrant 向量数据库**
 

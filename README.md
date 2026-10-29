@@ -79,17 +79,32 @@ OLLAMA_DEFAULT_EMBED_MODEL=nomic-embed-text
 ### 2. 启动服务
 
 ```bash
-# 启动 Qdrant（向量库）
+# 启动 Qdrant（向量库，只跑一次即可）
 make up
 
-# 后端（另一个终端）
-make dev-backend
+# 一键启动：探测 Ollama → rerank 模型 → 后端 → 前端
+./scripts/start.sh
+```
 
-# 前端（另一个终端）
+`scripts/start.sh` 会做这些事，日志统一写 `logs/`：
+
+1. 探测 Ollama（WSL 下自动尝试 `localhost`、默认网关、`/etc/resolv.conf` 的 DNS 服务器，兼容 Windows 上跑的 Ollama），探测结果通过 `OLLAMA_BASE_URL` 传给后端；
+2. 执行 `make rerank-up` 并等健康检查通过（失败只告警，精排自动降级为融合分）；
+3. 从**仓库根目录**启动后端（`PYTHONPATH=backend`，保证 `./storage/app.db` 指向真实数据）；
+4. 启动前端并等待 `5173` 就绪；`Ctrl+C` 会停掉本次启动的前后端。
+
+常用参数：`--port 8001`、`--no-frontend`、`--no-rerank`、`--strict-rerank`、`--no-reload`。
+
+手动启动（三个终端）：
+
+```bash
+make dev-backend
 make dev-frontend
 ```
 
 打开 http://localhost:5173 访问前端。
+
+> 对话模型默认用本地模型（`/llm-providers` 第一项 = ollama），本地不可用时后端自动兜底到 `DEEPSEEK`（`LLM_FALLBACK_ENABLED` / `LLM_FALLBACK_PROVIDER`）。
 
 ### 3. 导入电子书
 

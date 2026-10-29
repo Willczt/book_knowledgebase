@@ -1,4 +1,4 @@
-.PHONY: dev dev-qdrant install install-frontend lint test check format migrate \
+.PHONY: dev dev-qdrant start install install-frontend lint test check format migrate \
 	rerank-up rerank-down rerank-status rerank-logs
 
 # 优先使用项目内 venv，否则回退系统 python3
@@ -12,8 +12,10 @@ dev-qdrant:
 	docker compose -f docker-compose.yml -f docker-compose.dev.yml up qdrant -d
 
 # 启动后端开发服务器（使用项目 venv）
+# 必须从仓库根目录启动：.env 里的 DATABASE_URL=./storage/app.db 是相对路径，
+# 在 backend/ 下启动会解析成 backend/storage/app.db，等于换成一个空库
 dev-backend:
-	cd backend && $(PY) -m uvicorn main:app --reload --port 8000 --host 0.0.0.0
+	PYTHONPATH=$(CURDIR)/backend $(PY) -m uvicorn main:app --reload --port 8000 --host 0.0.0.0
 
 # 启动前端开发服务器（自动安装依赖）
 dev-frontend:
@@ -25,6 +27,10 @@ dev: dev-qdrant
 	@echo "Qdrant started at http://localhost:6333"
 	@echo "Run 'make dev-backend' in another terminal"
 	@echo "Run 'make dev-frontend' in another terminal"
+
+# 一键启动：探测 Ollama（Windows）→ rerank → 后端 → 前端
+start:
+	./scripts/start.sh $(ARGS)
 
 # 安装后端依赖（以 pyproject 为唯一来源，避免 requirements.txt 与它漂移）
 install:
